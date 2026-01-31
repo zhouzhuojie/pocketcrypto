@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -73,7 +75,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const coverage = fs.readFileSync('coverage.txt', 'utf8');
+            const coverage = fs.readFileSync('coverage.txt', 'utf8').trim();
             const coveragePct = coverage.split('\n').pop().match(/([\d.]+)%/)?.[1] || '0';
 
             github.rest.issues.createComment({
