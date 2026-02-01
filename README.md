@@ -38,10 +38,10 @@ func main() {
 
     app := pocketbase.New()
 
-    _, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.MLKEM768{}, []pocketcrypto.CollectionConfig{
-        {Collection: "wallets", Fields: []string{"private_key", "mnemonic", "seed_phrase"}},
-        {Collection: "accounts", Fields: []string{"api_key", "api_secret"}},
-    })
+    _, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.MLKEM768{},
+        pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic", "seed_phrase"}},
+        pocketcrypto.CollectionConfig{Collection: "accounts", Fields: []string{"api_key", "api_secret"}},
+    )
     if err != nil {
         log.Fatal(err)
     }
@@ -52,7 +52,7 @@ func main() {
 
 ### Builder Pattern (Advanced)
 
-For fine-grained control, use the builder pattern:
+For fine-grained control, call Register without configs:
 
 ```go
 import "github.com/yourusername/pocketcrypto"
@@ -63,10 +63,16 @@ if err != nil {
     log.Fatal(err)
 }
 
-hooks := pocketcrypto.NewEncryptionHooks(app, &pocketcrypto.AES256GCM{}, provider)
+hooks, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.AES256GCM{})
+if err != nil {
+    log.Fatal(err)
+}
+
 hooks.AddCollection("wallets", "private_key")
 hooks.AddCollection("secrets", "value")
-hooks.Register()
+if err := hooks.Register(); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## Generating Encryption Keys

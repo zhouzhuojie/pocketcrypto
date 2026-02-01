@@ -13,42 +13,35 @@ func TestRegister(t *testing.T) {
 	os.Setenv("ENCRYPTION_KEY", validKey)
 	defer os.Unsetenv("ENCRYPTION_KEY")
 
-	t.Run("fails with empty configs", func(t *testing.T) {
-		hooks, err := Register(context.Background(), nil, &AES256GCM{}, []CollectionConfig{})
-		assert.Error(t, err)
-		assert.Nil(t, hooks)
-		assert.Contains(t, err.Error(), "at least one collection config is required")
-	})
-
 	t.Run("fails with empty collection name", func(t *testing.T) {
-		configs := []CollectionConfig{
-			{Collection: "", Fields: []string{"private_key"}},
-		}
-
-		hooks, err := Register(context.Background(), nil, &AES256GCM{}, configs)
+		hooks, err := Register(context.Background(), nil, &AES256GCM{},
+			CollectionConfig{Collection: "", Fields: []string{"private_key"}})
 		assert.Error(t, err)
 		assert.Nil(t, hooks)
 	})
 
 	t.Run("fails with empty fields", func(t *testing.T) {
-		configs := []CollectionConfig{
-			{Collection: "wallets", Fields: []string{}},
-		}
-
-		hooks, err := Register(context.Background(), nil, &AES256GCM{}, configs)
+		hooks, err := Register(context.Background(), nil, &AES256GCM{},
+			CollectionConfig{Collection: "wallets", Fields: []string{}})
 		assert.Error(t, err)
 		assert.Nil(t, hooks)
 		assert.Contains(t, err.Error(), "must have at least one field to encrypt")
 	})
 
-	t.Run("succeeds with valid config", func(t *testing.T) {
-		configs := []CollectionConfig{
-			{Collection: "wallets", Fields: []string{"private_key"}},
-		}
-
-		hooks, err := Register(context.Background(), nil, &AES256GCM{}, configs)
+	t.Run("one-call setup", func(t *testing.T) {
+		hooks, err := Register(context.Background(), nil, &AES256GCM{},
+			CollectionConfig{Collection: "wallets", Fields: []string{"private_key"}})
 		assert.Error(t, err)
 		assert.Nil(t, hooks)
 		assert.Contains(t, err.Error(), "app is not a PocketBase instance")
+	})
+
+	t.Run("builder pattern returns hooks without registering", func(t *testing.T) {
+		hooks, err := Register(context.Background(), nil, &AES256GCM{})
+		// Should succeed and return hooks (no app means Register() won't fail on nil app check yet)
+		assert.NoError(t, err)
+		assert.NotNil(t, hooks)
+		// Can add collections
+		hooks.AddCollection("wallets", "private_key")
 	})
 }
