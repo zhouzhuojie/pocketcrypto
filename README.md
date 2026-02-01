@@ -46,7 +46,7 @@ func main() {
         {Collection: "secrets", Fields: []string{"value"}},
     }
 
-    _, err := pocketcrypto.RegisterEncryption(context.Background(), app, &pocketcrypto.MLKEM768{}, configs)
+    _, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.MLKEM768{}, configs)
     if err != nil {
         log.Fatal(err)
     }

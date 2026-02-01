@@ -140,13 +140,29 @@ func newEncryptionHooksFromConfig(
 	return hooks, nil
 }
 
-// registerEncryption registers encryption hooks with a flexible configuration.
-func registerEncryption(
+// Register registers encryption hooks with a flexible configuration.
+// This is the main public API for setting up column-level encryption.
+//
+// Example usage:
+//
+//	hooks, err := pocketcrypto.Register(
+//	    context.Background(),
+//	    app,
+//	    &pocketcrypto.MLKEM768{},
+//	    []pocketcrypto.CollectionConfig{
+//	        {Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
+//	    },
+//	)
+func Register(
 	ctx context.Context,
 	app any,
 	encrypter Encrypter,
 	configs []CollectionConfig,
 ) (*EncryptionHooks, error) {
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("at least one collection config is required")
+	}
+
 	provider, err := newProvider(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create key provider: %w", err)
@@ -164,13 +180,21 @@ func registerEncryption(
 	return hooks, nil
 }
 
-// registerDefaultEncryption registers encryption hooks with sensible defaults.
-func registerDefaultEncryption(ctx context.Context, app any) (*EncryptionHooks, error) {
+// RegisterDefault registers encryption hooks with sensible defaults for common use cases.
+// It uses ML-KEM-768 for post-quantum encryption and encrypts:
+//   - wallets: private_key, mnemonic, seed_phrase
+//   - accounts: api_key, api_secret, private_key
+//   - secrets: value
+//
+// Example usage:
+//
+//	hooks, err := pocketcrypto.RegisterDefault(context.Background(), app)
+func RegisterDefault(ctx context.Context, app any) (*EncryptionHooks, error) {
 	configs := []CollectionConfig{
 		{Collection: "wallets", Fields: []string{"private_key", "mnemonic", "seed_phrase"}},
 		{Collection: "accounts", Fields: []string{"api_key", "api_secret", "private_key"}},
 		{Collection: "secrets", Fields: []string{"value"}},
 	}
 
-	return registerEncryption(ctx, app, &MLKEM768{}, configs)
+	return Register(ctx, app, &MLKEM768{}, configs)
 }
