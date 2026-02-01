@@ -19,8 +19,6 @@ go get github.com/yourusername/pocketcrypto
 
 ## Quick Start
 
-### One-Call Setup (Recommended)
-
 ```go
 package main
 
@@ -41,37 +39,13 @@ func main() {
     _, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.MLKEM768{},
         pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic", "seed_phrase"}},
         pocketcrypto.CollectionConfig{Collection: "accounts", Fields: []string{"api_key", "api_secret"}},
+        pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
     )
     if err != nil {
         log.Fatal(err)
     }
 
     app.Start()
-}
-```
-
-### Builder Pattern (Advanced)
-
-For fine-grained control, call Register without configs:
-
-```go
-import "github.com/yourusername/pocketcrypto"
-
-// Create custom provider
-provider, err := pocketcrypto.NewAWSKMSProvider(context.Background(), "alias/my-key")
-if err != nil {
-    log.Fatal(err)
-}
-
-hooks, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.AES256GCM{})
-if err != nil {
-    log.Fatal(err)
-}
-
-hooks.AddCollection("wallets", "private_key")
-hooks.AddCollection("secrets", "value")
-if err := hooks.Register(); err != nil {
-    log.Fatal(err)
 }
 ```
 

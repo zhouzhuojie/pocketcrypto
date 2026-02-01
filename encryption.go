@@ -140,25 +140,19 @@ func newEncryptionHooksFromConfig(
 	return hooks, nil
 }
 
-// Register registers encryption hooks for PocketBase with optional configurations.
+// Register registers encryption hooks for PocketBase with a one-call setup.
 //
-// One-call setup (auto provider):
+// Example:
 //
 //	hooks, err := pocketcrypto.Register(ctx, app, &pocketcrypto.MLKEM768{},
-//	    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key"}},
+//	    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
 //	    pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
 //	)
-//
-// Builder pattern (no configs, returns hooks for chaining):
-//
-//	hooks, err := pocketcrypto.Register(ctx, app, &pocketcrypto.AES256GCM{})
-//	if err != nil {
-//	    return err
-//	}
-//	hooks.AddCollection("wallets", "private_key")
-//	hooks.AddCollection("secrets", "value")
-//	return hooks.Register()
 func Register(ctx context.Context, app any, encrypter Encrypter, configs ...CollectionConfig) (*EncryptionHooks, error) {
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("at least one collection config is required")
+	}
+
 	provider, err := newProvider(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create key provider: %w", err)
@@ -166,23 +160,19 @@ func Register(ctx context.Context, app any, encrypter Encrypter, configs ...Coll
 
 	hooks := newEncryptionHooks(app, encrypter, provider)
 
-	// If configs provided, auto-register and return
-	if len(configs) > 0 {
-		for _, cfg := range configs {
-			if cfg.Collection == "" {
-				return nil, fmt.Errorf("collection name cannot be empty")
-			}
-			if len(cfg.Fields) == 0 {
-				return nil, fmt.Errorf("collection %s must have at least one field to encrypt", cfg.Collection)
-			}
-			hooks.AddCollection(cfg.Collection, cfg.Fields...)
+	for _, cfg := range configs {
+		if cfg.Collection == "" {
+			return nil, fmt.Errorf("collection name cannot be empty")
 		}
-		if err := hooks.Register(); err != nil {
-			return nil, fmt.Errorf("failed to register encryption hooks: %w", err)
+		if len(cfg.Fields) == 0 {
+			return nil, fmt.Errorf("collection %s must have at least one field to encrypt", cfg.Collection)
 		}
-		return hooks, nil
+		hooks.AddCollection(cfg.Collection, cfg.Fields...)
 	}
 
-	// No configs: return hooks for builder pattern
+	if err := hooks.Register(); err != nil {
+		return nil, fmt.Errorf("failed to register encryption hooks: %w", err)
+	}
+
 	return hooks, nil
 }
