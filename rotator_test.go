@@ -204,3 +204,133 @@ func mustEncryptWithKeyID(plaintext, keyID string, key []byte) string {
 	encrypted, _ := aes.encryptWithKey(plaintext, key, keyID)
 	return encrypted
 }
+
+func TestKeyRotator_EdgeCases(t *testing.T) {
+	oldKey := bytes.Repeat([]byte{0x01}, 32)
+	newKey := bytes.Repeat([]byte{0x02}, 32)
+	encrypter := &AES256GCM{}
+
+	newProvider := &rotatableMockKeyProvider{
+		keys:         map[string][]byte{"old-key": oldKey, "new-key": newKey},
+		currentKeyID: "new-key",
+	}
+	rotator := newKeyRotator(newProvider, encrypter)
+
+	t.Run("empty encrypted data returns error", func(t *testing.T) {
+		_, _, _, err := rotator.LazyDecrypt("", newProvider)
+		assert.Error(t, err) // Empty string is not a valid envelope
+	})
+
+	t.Run("already encrypted with current key", func(t *testing.T) {
+		encrypted, err := encrypter.Encrypt("fresh-data", newProvider)
+		require.NoError(t, err)
+
+		plaintext, newEncrypted, rotated, err := rotator.LazyDecrypt(encrypted, newProvider)
+		require.NoError(t, err)
+		assert.Equal(t, "fresh-data", plaintext)
+		assert.False(t, rotated)
+		assert.Empty(t, newEncrypted)
+	})
+
+	t.Run("non-encrypted data returns error", func(t *testing.T) {
+		_, _, _, err := rotator.LazyDecrypt("this is plain text", newProvider)
+		assert.Error(t, err) // Plain text is not a valid envelope
+	})
+
+	t.Run("invalid envelope format", func(t *testing.T) {
+		invalidData := "not-valid-json"
+		_, _, _, err := rotator.LazyDecrypt(invalidData, newProvider)
+		assert.Error(t, err)
+	})
+
+	t.Run("multiple fields mixed keys", func(t *testing.T) {
+		// Encrypt with old key directly
+		oldEncrypted := mustEncryptWithKeyID("old-secret", "old-key", oldKey)
+		newEncrypted := mustEncryptWithKeyID("new-secret", "new-key", newKey)
+
+		// Create record with both old and new encrypted fields
+		record := &EncryptedRecord{
+			ID: "mixed",
+			EncryptedFields: map[string]string{
+				"old_field": oldEncrypted,
+				"new_field": newEncrypted,
+			},
+		}
+
+		rotatedRecord, rotated, err := rotator.RotateRecord(record)
+		require.NoError(t, err)
+		assert.True(t, rotated)
+
+		// Only old_field should be rotated
+		assert.NotEqual(t, oldEncrypted, rotatedRecord.EncryptedFields["old_field"])
+		assert.Equal(t, newEncrypted, rotatedRecord.EncryptedFields["new_field"])
+	})
+
+	t.Run("all fields already new key", func(t *testing.T) {
+		encrypted, _ := encrypter.Encrypt("data", newProvider)
+		record := &EncryptedRecord{
+			ID:              "all-new",
+			EncryptedFields: map[string]string{"field1": encrypted, "field2": encrypted},
+		}
+
+		rotatedRecord, rotated, err := rotator.RotateRecord(record)
+		require.NoError(t, err)
+		assert.False(t, rotated)
+		assert.Equal(t, encrypted, rotatedRecord.EncryptedFields["field1"])
+		assert.Equal(t, encrypted, rotatedRecord.EncryptedFields["field2"])
+	})
+
+	t.Run("provider error on decrypt", func(t *testing.T) {
+		// Create a provider that fails on GetKey
+		failingProvider := &errorKeyProvider{
+			rotatableMockKeyProvider: &rotatableMockKeyProvider{
+				keys:         newProvider.keys,
+				currentKeyID: newProvider.currentKeyID,
+			},
+			getKeyError: true,
+		}
+
+		oldEncrypted, _ := encrypter.Encrypt("data", newProvider)
+
+		_, _, _, err := rotator.LazyDecrypt(oldEncrypted, failingProvider)
+		assert.Error(t, err)
+	})
+
+	t.Run("empty fields map", func(t *testing.T) {
+		record := &EncryptedRecord{
+			ID:              "empty",
+			EncryptedFields: map[string]string{},
+		}
+
+		rotatedRecord, rotated, err := rotator.RotateRecord(record)
+		require.NoError(t, err)
+		assert.False(t, rotated)
+		assert.Empty(t, rotatedRecord.EncryptedFields)
+	})
+
+	t.Run("zero batch size defaults to 100", func(t *testing.T) {
+		records := []EncryptedRecord{
+			{ID: "1", EncryptedFields: map[string]string{"data": ""}},
+		}
+
+		migrated, skipped, err := rotator.RotateCollection(context.Background(), records, 0, func(r *EncryptedRecord) error {
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 0, migrated)
+		assert.Equal(t, 1, skipped) // Empty data gets skipped
+	})
+}
+
+// errorKeyProvider is a mock provider that can simulate errors
+type errorKeyProvider struct {
+	*rotatableMockKeyProvider
+	getKeyError bool
+}
+
+func (m *errorKeyProvider) GetKey(keyID string) ([]byte, error) {
+	if m.getKeyError {
+		return nil, assert.AnError
+	}
+	return m.rotatableMockKeyProvider.GetKey(keyID)
+}
