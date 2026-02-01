@@ -19,7 +19,7 @@ go get github.com/yourusername/pocketcrypto
 
 ## Quick Start
 
-### Basic Setup with Local Provider (Post-Quantum ML-KEM)
+### One-Call Setup (Recommended)
 
 ```go
 package main
@@ -34,19 +34,14 @@ import (
 )
 
 func main() {
-    // Set encryption key (base64-encoded 32-byte key)
     os.Setenv("ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
 
     app := pocketbase.New()
 
-    // Configure encryption for collections (uses ML-KEM-768 by default)
-    configs := []pocketcrypto.CollectionConfig{
+    _, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.MLKEM768{}, []pocketcrypto.CollectionConfig{
         {Collection: "wallets", Fields: []string{"private_key", "mnemonic", "seed_phrase"}},
-        {Collection: "accounts", Fields: []string{"api_key", "api_secret", "private_key"}},
-        {Collection: "secrets", Fields: []string{"value"}},
-    }
-
-    _, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.MLKEM768{}, configs)
+        {Collection: "accounts", Fields: []string{"api_key", "api_secret"}},
+    })
     if err != nil {
         log.Fatal(err)
     }
@@ -55,42 +50,21 @@ func main() {
 }
 ```
 
-### Using AWS KMS Provider
+### Builder Pattern (Advanced)
 
-```go
-import (
-    "context"
-
-    "github.com/yourusername/pocketcrypto"
-)
-
-// Create AWS KMS provider
-provider, err := pocketcrypto.NewAWSKMSProvider(
-    context.Background(),
-    "alias/your-kms-key-alias",
-)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Use AES-256-GCM (faster, suitable for most use cases)
-hooks := pocketcrypto.NewEncryptionHooks(app, &pocketcrypto.AES256GCM{}, provider)
-hooks.AddCollection("wallets", "private_key")
-hooks.Register()
-```
-
-### Using HashiCorp Vault Provider
+For fine-grained control, use the builder pattern:
 
 ```go
 import "github.com/yourusername/pocketcrypto"
 
-// Create Vault provider
-provider, err := pocketcrypto.NewVaultProvider()
+// Create custom provider
+provider, err := pocketcrypto.NewAWSKMSProvider(context.Background(), "alias/my-key")
 if err != nil {
     log.Fatal(err)
 }
 
 hooks := pocketcrypto.NewEncryptionHooks(app, &pocketcrypto.AES256GCM{}, provider)
+hooks.AddCollection("wallets", "private_key")
 hooks.AddCollection("secrets", "value")
 hooks.Register()
 ```

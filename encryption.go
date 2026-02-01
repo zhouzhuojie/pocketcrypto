@@ -153,6 +153,12 @@ func newEncryptionHooksFromConfig(
 //	        {Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
 //	    },
 //	)
+//
+// For advanced use cases, use the builder pattern:
+//
+//	hooks := pocketcrypto.NewEncryptionHooks(app, &pocketcrypto.AES256GCM{}, provider)
+//	hooks.AddCollection("wallets", "private_key")
+//	hooks.Register()
 func Register(
 	ctx context.Context,
 	app any,
@@ -178,23 +184,4 @@ func Register(
 	}
 
 	return hooks, nil
-}
-
-// RegisterDefault registers encryption hooks with sensible defaults for common use cases.
-// It uses ML-KEM-768 for post-quantum encryption and encrypts:
-//   - wallets: private_key, mnemonic, seed_phrase
-//   - accounts: api_key, api_secret, private_key
-//   - secrets: value
-//
-// Example usage:
-//
-//	hooks, err := pocketcrypto.RegisterDefault(context.Background(), app)
-func RegisterDefault(ctx context.Context, app any) (*EncryptionHooks, error) {
-	configs := []CollectionConfig{
-		{Collection: "wallets", Fields: []string{"private_key", "mnemonic", "seed_phrase"}},
-		{Collection: "accounts", Fields: []string{"api_key", "api_secret", "private_key"}},
-		{Collection: "secrets", Fields: []string{"value"}},
-	}
-
-	return Register(ctx, app, &MLKEM768{}, configs)
 }
