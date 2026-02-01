@@ -8,10 +8,12 @@ import (
 
 // LocalProvider provides key management using environment variables.
 type LocalProvider struct {
-	masterKey []byte
+	masterKey   []byte
+	previousKey []byte
 }
 
-// newLocalProvider creates a new LocalProvider from the ENCRYPTION_KEY environment variable.
+// newLocalProvider creates a new LocalProvider from environment variables.
+// Supports ENCRYPTION_KEY (current/master) and ENCRYPTION_KEY_OLD (previous for rotation).
 func newLocalProvider() (*LocalProvider, error) {
 	keyStr := os.Getenv("ENCRYPTION_KEY")
 	if keyStr == "" {
@@ -27,7 +29,22 @@ func newLocalProvider() (*LocalProvider, error) {
 		return nil, errors.New("ENCRYPTION_KEY must be 32 bytes (256 bits) when decoded")
 	}
 
-	return &LocalProvider{masterKey: key}, nil
+	p := &LocalProvider{masterKey: key}
+
+	// Support previous key for rotation (lazy decryption falls back to it)
+	oldKeyStr := os.Getenv("ENCRYPTION_KEY_OLD")
+	if oldKeyStr != "" {
+		oldKey, err := base64.StdEncoding.DecodeString(oldKeyStr)
+		if err != nil {
+			return nil, errors.New("invalid base64 encoding in ENCRYPTION_KEY_OLD")
+		}
+		if len(oldKey) != 32 {
+			return nil, errors.New("ENCRYPTION_KEY_OLD must be 32 bytes (256 bits) when decoded")
+		}
+		p.previousKey = oldKey
+	}
+
+	return p, nil
 }
 
 // newLocalProviderFromKey creates a LocalProvider directly from a key byte slice.
@@ -41,8 +58,25 @@ func newLocalProviderFromKey(key []byte) (*LocalProvider, error) {
 	return &LocalProvider{masterKey: keyCopy}, nil
 }
 
-// GetKey retrieves the master encryption key.
+// newLocalProviderWithPrevious creates a provider with both current and previous keys.
+func newLocalProviderWithPrevious(current, previous []byte) (*LocalProvider, error) {
+	if len(current) != 32 || len(previous) != 32 {
+		return nil, errors.New("keys must be 32 bytes")
+	}
+
+	return &LocalProvider{
+		masterKey:   current,
+		previousKey: previous,
+	}, nil
+}
+
+// GetKey retrieves the encryption key.
+// For lazy rotation: returns current master key by default.
+// Falls back to previous key if the keyID is "previous".
 func (p *LocalProvider) GetKey(keyID string) ([]byte, error) {
+	if keyID == "previous" && p.previousKey != nil {
+		return p.previousKey, nil
+	}
 	return p.masterKey, nil
 }
 
@@ -66,4 +100,9 @@ func (p *LocalProvider) MasterKey() []byte {
 	result := make([]byte, len(p.masterKey))
 	copy(result, p.masterKey)
 	return result
+}
+
+// HasPrevious returns true if a previous key is configured for rotation.
+func (p *LocalProvider) HasPrevious() bool {
+	return p.previousKey != nil
 }

@@ -111,3 +111,51 @@ func TestLocalProvider_Operations(t *testing.T) {
 		assert.Equal(t, byte(0x01), original[0])
 	})
 }
+
+func TestLocalProvider_Rotation(t *testing.T) {
+	currentKey := "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" // "0123456789abcdef..."
+	oldKey := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" // 0x00 x 32
+
+	t.Run("current key only", func(t *testing.T) {
+		os.Setenv("ENCRYPTION_KEY", currentKey)
+		os.Unsetenv("ENCRYPTION_KEY_OLD")
+		defer os.Unsetenv("ENCRYPTION_KEY")
+		defer os.Unsetenv("ENCRYPTION_KEY_OLD")
+
+		provider, err := newLocalProvider()
+		require.NoError(t, err)
+
+		// GetKey without keyID returns current
+		key, _ := provider.GetKey("")
+		assert.NotNil(t, key)
+	})
+
+	t.Run("both current and old keys", func(t *testing.T) {
+		os.Setenv("ENCRYPTION_KEY", currentKey)
+		os.Setenv("ENCRYPTION_KEY_OLD", oldKey)
+		defer os.Unsetenv("ENCRYPTION_KEY")
+		defer os.Unsetenv("ENCRYPTION_KEY_OLD")
+
+		provider, err := newLocalProvider()
+		require.NoError(t, err)
+
+		// GetKey("") returns current (starts with '0' = 0x30)
+		current, _ := provider.GetKey("")
+		assert.Equal(t, byte('0'), current[0])
+
+		// GetKey("previous") returns old (all zeros)
+		previous, _ := provider.GetKey("previous")
+		assert.Equal(t, byte(0x00), previous[0])
+	})
+
+	t.Run("invalid old key fails", func(t *testing.T) {
+		os.Setenv("ENCRYPTION_KEY", currentKey)
+		os.Setenv("ENCRYPTION_KEY_OLD", "not-valid-base64")
+		defer os.Unsetenv("ENCRYPTION_KEY")
+		defer os.Unsetenv("ENCRYPTION_KEY_OLD")
+
+		_, err := newLocalProvider()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "ENCRYPTION_KEY_OLD")
+	})
+}

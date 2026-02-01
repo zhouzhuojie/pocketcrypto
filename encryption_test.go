@@ -109,6 +109,96 @@ func TestEncryptionHooks_AddCollection(t *testing.T) {
 	assert.Same(t, hooks, result)
 }
 
+func TestEncryptionHooks_LazyDecrypt(t *testing.T) {
+	oldKey := bytes.Repeat([]byte{0x01}, 32)
+	newKey := bytes.Repeat([]byte{0x02}, 32)
+
+	t.Run("decrypts with current key", func(t *testing.T) {
+		provider := newTestProvider(newKey, nil)
+		encrypter := &AES256GCM{}
+		hooks := newEncryptionHooks(nil, encrypter, provider)
+
+		encrypted, err := encrypter.Encrypt("test-data", provider)
+		require.NoError(t, err)
+
+		result, rotated, err := hooks.lazyDecrypt(encrypted)
+		require.NoError(t, err)
+		assert.Equal(t, "test-data", result)
+		assert.False(t, rotated)
+	})
+
+	t.Run("lazy rotates with previous key", func(t *testing.T) {
+		provider := newTestProvider(newKey, oldKey)
+		encrypter := &AES256GCM{}
+		hooks := newEncryptionHooks(nil, encrypter, provider)
+
+		// Encrypt with old key
+		oldProvider := newTestProvider(oldKey, nil)
+		encrypted, err := encrypter.Encrypt("old-data", oldProvider)
+		require.NoError(t, err)
+
+		// Decrypt with provider that has both keys
+		result, rotated, err := hooks.lazyDecrypt(encrypted)
+		require.NoError(t, err)
+		assert.True(t, rotated)
+		assert.NotEqual(t, encrypted, result)
+
+		// Verify the re-encrypted data can be decrypted with new key
+		plaintext, err := encrypter.Decrypt(result, provider)
+		require.NoError(t, err)
+		assert.Equal(t, "old-data", plaintext)
+	})
+
+	t.Run("fails when no previous key available", func(t *testing.T) {
+		provider := newTestProvider(newKey, nil) // No previous key
+		encrypter := &AES256GCM{}
+		hooks := newEncryptionHooks(nil, encrypter, provider)
+
+		// Encrypt with a different key that provider doesn't know
+		diffKey := bytes.Repeat([]byte{0x03}, 32)
+		diffProvider := newTestProvider(diffKey, nil)
+		encrypted, err := encrypter.Encrypt("unknown-data", diffProvider)
+		require.NoError(t, err)
+
+		_, _, err = hooks.lazyDecrypt(encrypted)
+		assert.Error(t, err)
+	})
+}
+
+// newTestProvider creates a provider for testing with optional previous key.
+func newTestProvider(current, previous []byte) *testProvider {
+	return &testProvider{
+		currentKey:   current,
+		previousKey:  previous,
+		currentKeyID: "current",
+	}
+}
+
+type testProvider struct {
+	currentKey   []byte
+	previousKey  []byte
+	currentKeyID string
+}
+
+func (p *testProvider) GetKey(keyID string) ([]byte, error) {
+	if keyID == "previous" && p.previousKey != nil {
+		return p.previousKey, nil
+	}
+	return p.currentKey, nil
+}
+
+func (p *testProvider) EncryptKey(key []byte, keyID string) ([]byte, error) {
+	return key, nil
+}
+
+func (p *testProvider) DecryptKey(encryptedKey []byte) ([]byte, error) {
+	return encryptedKey, nil
+}
+
+func (p *testProvider) KeyID() string {
+	return p.currentKeyID
+}
+
 // mockRecord implements RecordLike for testing
 type mockRecord struct {
 	fields map[string]string

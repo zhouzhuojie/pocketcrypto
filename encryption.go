@@ -15,6 +15,7 @@ type RecordLike interface {
 }
 
 // EncryptionHooks registers encryption/decryption hooks for PocketBase.
+// Supports automatic lazy key rotation - old data is re-encrypted on read.
 type EncryptionHooks struct {
 	app           any
 	encrypter     Encrypter
@@ -100,6 +101,8 @@ func (h *EncryptionHooks) encryptRecord(record RecordLike, fields []string) {
 }
 
 // decryptRecord decrypts the specified fields in a record.
+// Supports lazy key rotation: if decryption with current key fails,
+// tries the previous key (if available) and re-encrypts with current key.
 func (h *EncryptionHooks) decryptRecord(record RecordLike, fields []string) {
 	for _, field := range fields {
 		value := record.GetString(field)
@@ -107,14 +110,61 @@ func (h *EncryptionHooks) decryptRecord(record RecordLike, fields []string) {
 			continue
 		}
 
-		decrypted, err := h.encrypter.Decrypt(value, h.provider)
+		decrypted, rotated, err := h.lazyDecrypt(value)
 		if err != nil {
 			log.Printf("decryption failed for field %s: %v", field, err)
 			continue
 		}
 
-		record.Set(field, decrypted)
+		// If rotated (was encrypted with old key), save the re-encrypted value
+		if rotated {
+			record.Set(field, decrypted) // decrypted contains the re-encrypted value
+		} else {
+			record.Set(field, decrypted)
+		}
 	}
+}
+
+// lazyDecrypt attempts to decrypt data with the current key.
+// If that fails and a previous key exists, tries the previous key.
+// On success with previous key, re-encrypts with current key.
+//
+// Returns: (plaintext OR re-encrypted value, wasRotated, error)
+func (h *EncryptionHooks) lazyDecrypt(encrypted string) (string, bool, error) {
+	// Try current key first
+	plaintext, err := h.encrypter.Decrypt(encrypted, h.provider)
+	if err == nil {
+		return plaintext, false, nil
+	}
+
+	// Try previous key if available
+	prevProvider, ok := h.provider.(interface{ GetKey(keyID string) ([]byte, error) })
+	if !ok {
+		return "", false, fmt.Errorf("decryption failed and provider doesn't support rotation: %w", err)
+	}
+
+	// Try to get previous key
+	prevKey, err := prevProvider.GetKey("previous")
+	if err != nil || prevKey == nil {
+		return "", false, fmt.Errorf("decryption failed (no previous key): %w", err)
+	}
+
+	// Create a temporary provider with previous key
+	tempProvider := &staticProvider{keyID: "previous", key: prevKey}
+
+	// Try decrypt with previous key
+	plaintext, err = h.encrypter.Decrypt(encrypted, tempProvider)
+	if err != nil {
+		return "", false, fmt.Errorf("decryption failed with previous key: %w", err)
+	}
+
+	// Re-encrypt with current key (lazy rotation)
+	newEncrypted, err := h.encrypter.Encrypt(plaintext, h.provider)
+	if err != nil {
+		return "", false, fmt.Errorf("re-encryption failed during rotation: %w", err)
+	}
+
+	return newEncrypted, true, nil
 }
 
 // newEncryptionHooksFromConfig creates encryption hooks from a configuration.
