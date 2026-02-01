@@ -52,13 +52,17 @@ export VAULT_KEY_PATH=pocketcrypto-key  # optional, defaults to "pocketcrypto/en
 
 ## Key Rotation
 
-PocketCrypto supports two rotation strategies:
+PocketCrypto supports **lazy key rotation** by default:
 
-### Lazy Rotation (Recommended)
+### How It Works
 
-Automatic rotation when data is read. Best for zero-downtime migrations.
+1. **Encrypt always uses current key**
+2. **Decrypt tries current key first**, falls back to previous key if needed
+3. **Old data is automatically re-encrypted on read** (lazy rotation)
+4. **Proactive batch migration** available for complete migration
 
-**Local Provider Rotation:**
+### Local Provider Rotation
+
 ```bash
 # Before rotation: only current key
 export ENCRYPTION_KEY="new-key-base64"
@@ -72,66 +76,44 @@ export ENCRYPTION_KEY="new-key-base64"
 # (unset ENCRYPTION_KEY_OLD)
 ```
 
-**KMS/Vault Rotation:**
-```go
-// 1. Generate new key in provider
-newKey := provider.GenerateNewKey()  // or store in Vault
+### Production Flow
 
-// 2. Use lazy rotation on reads
-rotator := pocketcrypto.NewKeyRotator(provider, &pocketcrypto.AES256GCM{})
-
-func getDecrypted(recordID string) (string, error) {
-    encrypted := db.GetEncrypted(recordID)
-    plaintext, newEncrypted, rotated, err := rotator.LazyDecrypt(encrypted, provider)
-    if rotated {
-        db.Save(recordID, newEncrypted)  // Persist re-encrypted value
-    }
-    return plaintext, err
-}
+**Read Path (Automatic Lazy Rotation):**
+```
+Read Record → Try decrypt with current key → Failed?
+  → Try decrypt with previous key → Success?
+    → Re-encrypt with current key, save, return plaintext
+  → Current key success? Return plaintext
 ```
 
-**Production Read Path:**
-```
-Read Record → Decrypt with current key → Check if rotation needed
-  → If old key: decrypt, re-encrypt with new key, save, return plaintext
-  → If current key: return plaintext
-```
-
-### Batch Rotation
-
-Proactive migration of all encrypted records.
-
-```go
-rotator := pocketcrypto.NewKeyRotator(provider, &pocketcrypto.AES256GCM{})
-
-// Step 1: Make new key available in provider
-// - Local: set ENCRYPTION_KEY_OLD alongside ENCRYPTION_KEY
-// - KMS/Vault: store new key in the service
-
-// Step 2: Migrate all records
-migrated, skipped, err := rotator.RotateCollection(
-    ctx,
-    allRecords,
-    100, // batch size
-    func(r *pocketcrypto.EncryptedRecord) error {
-        return db.BatchSave(r.ID, r.EncryptedFields)
-    },
-)
-fmt.Printf("Migrated: %d, Skipped: %d\n", migrated, skipped)
-```
-
-**Production Write Path (During Rotation):**
+**Write Path:**
 ```
 Write Record → Encrypt with current key → Save
-  → Works seamlessly with both old and new keys
-  → No downtime during rotation
+  → Works seamlessly during rotation
+  → No code changes needed
 ```
 
-## Rotation Checklist
+### Proactive Batch Migration
 
-1. **Before rotation:** Store new key (Local: ENCRYPTION_KEY_OLD, KMS/Vault: in service)
-2. **During rotation:** Use lazy rotation or batch migration
-3. **After rotation:** Verify all records migrated, remove old key
+For faster migration or zero reads:
+
+```go
+rotator := pocketcrypto.NewKeyRotator(provider, &pocketcrypto.AES256GCM{})
+
+migrated, skipped, err := rotator.RotateAll(
+    ctx,
+    allRecords,
+    func(r *EncryptedRecord) error {
+        return db.Save(r.ID, r.EncryptedFields)
+    },
+)
+```
+
+### Rotation Checklist
+
+1. **Before rotation:** Store new key (Local: ENCRYPTION_KEY, KMS/Vault: in service)
+2. **During rotation:** Reads automatically lazy-rotate old data
+3. **After rotation:** Remove old key (ENCRYPTION_KEY_OLD) when all data migrated
 
 ## What You Can't Do
 
