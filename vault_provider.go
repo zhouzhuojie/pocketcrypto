@@ -1,41 +1,32 @@
-package crypto
+package pocketcrypto
 
 import (
 	"encoding/base64"
 	"errors"
 	"os"
 
-	vault "github.com/hashicorp/vault/api"
+	vaultapi "github.com/hashicorp/vault/api"
 )
 
 // VaultProvider provides key management using HashiCorp Vault.
-// This is an alternative to AWS KMS for self-hosted deployments.
-//
-// Features:
-// - Multiple seal/unseal methods
-// - Dynamic secrets
-// - Fine-grained access policies
-// - Audit logs
 type VaultProvider struct {
-	client    *vault.Client
+	client    *vaultapi.Client
 	mountPath string
 	keyPath   string
 }
 
-// NewVaultProvider creates a new VaultProvider.
-// The mountPath and keyPath specify where the encryption key is stored in Vault.
-// By default, this uses the "secret" mount point and "pocketcrypto/encryption-key" path.
-func NewVaultProvider() (*VaultProvider, error) {
+// newVaultProvider creates a new VaultProvider.
+func newVaultProvider() (*VaultProvider, error) {
 	addr := os.Getenv("VAULT_ADDR")
 	token := os.Getenv("VAULT_TOKEN")
 	if addr == "" || token == "" {
 		return nil, errors.New("VAULT_ADDR and VAULT_TOKEN environment variables must be set")
 	}
 
-	config := vault.DefaultConfig()
+	config := vaultapi.DefaultConfig()
 	config.Address = addr
 
-	client, err := vault.NewClient(config)
+	client, err := vaultapi.NewClient(config)
 	if err != nil {
 		return nil, err
 	}
@@ -58,9 +49,8 @@ func NewVaultProvider() (*VaultProvider, error) {
 	}, nil
 }
 
-// NewVaultProviderWithClient creates a VaultProvider with an existing client.
-// This is useful for testing or when Vault client has special configuration.
-func NewVaultProviderWithClient(client *vault.Client, mountPath, keyPath string) *VaultProvider {
+// newVaultProviderWithClient creates a VaultProvider with an existing client.
+func newVaultProviderWithClient(client *vaultapi.Client, mountPath, keyPath string) *VaultProvider {
 	return &VaultProvider{
 		client:    client,
 		mountPath: mountPath,
@@ -78,7 +68,6 @@ func (p *VaultProvider) GetKey(keyID string) ([]byte, error) {
 		return nil, errors.New("encryption key not found in Vault")
 	}
 
-	// Support both "key" and "value" field names
 	var keyStr string
 	if v, ok := secret.Data["key"].(string); ok {
 		keyStr = v
@@ -101,7 +90,6 @@ func (p *VaultProvider) GetKey(keyID string) ([]byte, error) {
 }
 
 // EncryptKey stores an encrypted version of the key in Vault.
-// For Vault, the data is encrypted at rest by Vault's encryption backend.
 func (p *VaultProvider) EncryptKey(key []byte, keyID string) ([]byte, error) {
 	keyB64 := base64.StdEncoding.EncodeToString(key)
 
@@ -117,8 +105,6 @@ func (p *VaultProvider) EncryptKey(key []byte, keyID string) ([]byte, error) {
 
 // DecryptKey retrieves and decrypts an encrypted key from Vault.
 func (p *VaultProvider) DecryptKey(encryptedKey []byte) ([]byte, error) {
-	// For Vault, we store the key directly (Vault encrypts at rest)
-	// The encryptedKey parameter is the key path
 	secret, err := p.client.Logical().Read(p.mountPath + "/" + string(encryptedKey))
 	if err != nil {
 		return nil, err
@@ -156,7 +142,7 @@ func (p *VaultProvider) DeleteKey() error {
 	return err
 }
 
-// Client returns the underlying Vault client for advanced operations.
-func (p *VaultProvider) Client() *vault.Client {
+// Client returns the underlying Vault client.
+func (p *VaultProvider) Client() *vaultapi.Client {
 	return p.client
 }
