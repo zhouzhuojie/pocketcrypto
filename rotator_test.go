@@ -160,15 +160,15 @@ func TestKeyRotator_RotateCollection(t *testing.T) {
 			}
 		}
 
-		// Cancel after a few records
-		go func() {
-			cancel()
-		}()
+		// Cancel context immediately
+		cancel()
 
+		// Should fail immediately since context is already cancelled
 		_, _, err := rotator.RotateCollection(ctx, records, 100, func(r *EncryptedRecord) error {
 			return nil
 		})
 		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "context canceled")
 	})
 }
 

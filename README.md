@@ -27,18 +27,20 @@ _, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
 
 | Provider | Environment | Description |
 |----------|-------------|-------------|
-| Local | `ENCRYPTION_KEY` | 32-byte base64 key (development) |
-| AWS KMS | `KEY_PROVIDER=aws-kms`, `AWS_KMS_KEY_ID`, `AWS_REGION` | Managed AWS keys |
+| Local | `ENCRYPTION_KEY`, `ENCRYPTION_KEY_OLD` | 32-byte base64 keys (development) |
+| AWS KMS | `KEY_PROVIDER=aws-kms`, `AWS_KMS_KEY_ID`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Managed AWS keys |
 | Vault | `KEY_PROVIDER=vault`, `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_MOUNT_PATH`, `VAULT_KEY_PATH` | HashiCorp secrets |
 
 ```bash
-# Local
+# Local (single key for production, or both keys for rotation)
 export ENCRYPTION_KEY="$(openssl rand -base64 32)"
+export ENCRYPTION_KEY_OLD="old-key-base64-here"  # during rotation
 
-# AWS KMS
+# AWS KMS (credentials auto-loaded from env, ~/.aws/credentials, or IAM role)
 export KEY_PROVIDER=aws-kms
 export AWS_KMS_KEY_ID=alias/pocketcrypto-key
-export AWS_REGION=us-east-1  # optional, defaults to SDK default
+export AWS_REGION=us-east-1
+# Optional: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
 # Vault
 export KEY_PROVIDER=vault
@@ -56,10 +58,24 @@ PocketCrypto supports two rotation strategies:
 
 Automatic rotation when data is read. Best for zero-downtime migrations.
 
+**Local Provider Rotation:**
+```bash
+# Before rotation: only current key
+export ENCRYPTION_KEY="new-key-base64"
+
+# During rotation: set old key alongside new key
+export ENCRYPTION_KEY="new-key-base64"
+export ENCRYPTION_KEY_OLD="old-key-base64"
+
+# After rotation: remove old key
+export ENCRYPTION_KEY="new-key-base64"
+# (unset ENCRYPTION_KEY_OLD)
+```
+
+**KMS/Vault Rotation:**
 ```go
-// 1. Generate new key and update provider
-newKey := generateNewKey()
-provider.StoreKey(newKey)
+// 1. Generate new key in provider
+newKey := provider.GenerateNewKey()  // or store in Vault
 
 // 2. Use lazy rotation on reads
 rotator := pocketcrypto.NewKeyRotator(provider, &pocketcrypto.AES256GCM{})
@@ -88,9 +104,9 @@ Proactive migration of all encrypted records.
 ```go
 rotator := pocketcrypto.NewKeyRotator(provider, &pocketcrypto.AES256GCM{})
 
-// Step 1: Generate new key
-newKey := generateNewKey()
-provider.StoreKey(newKey)
+// Step 1: Make new key available in provider
+// - Local: set ENCRYPTION_KEY_OLD alongside ENCRYPTION_KEY
+// - KMS/Vault: store new key in the service
 
 // Step 2: Migrate all records
 migrated, skipped, err := rotator.RotateCollection(
@@ -113,9 +129,9 @@ Write Record → Encrypt with current key → Save
 
 ## Rotation Checklist
 
-1. **Before rotation:** Store new key in provider (KMS/Vault/local)
+1. **Before rotation:** Store new key (Local: ENCRYPTION_KEY_OLD, KMS/Vault: in service)
 2. **During rotation:** Use lazy rotation or batch migration
-3. **After rotation:** Verify all records are migrated, remove old key
+3. **After rotation:** Verify all records migrated, remove old key
 
 ## What You Can't Do
 
