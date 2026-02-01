@@ -1,4 +1,4 @@
-package crypto
+package pocketcrypto
 
 import (
 	"encoding/base64"
@@ -7,16 +7,12 @@ import (
 )
 
 // LocalProvider provides key management using environment variables.
-// This is intended for development and testing only.
-// For production, use AWSKMSProvider or VaultProvider.
 type LocalProvider struct {
 	masterKey []byte
 }
 
-// NewLocalProvider creates a new LocalProvider by reading the encryption key
-// from the ENCRYPTION_KEY environment variable.
-// The key must be base64-encoded and 32 bytes decoded (for AES-256).
-func NewLocalProvider() (*LocalProvider, error) {
+// newLocalProvider creates a new LocalProvider from the ENCRYPTION_KEY environment variable.
+func newLocalProvider() (*LocalProvider, error) {
 	keyStr := os.Getenv("ENCRYPTION_KEY")
 	if keyStr == "" {
 		return nil, errors.New("ENCRYPTION_KEY environment variable is not set")
@@ -34,9 +30,8 @@ func NewLocalProvider() (*LocalProvider, error) {
 	return &LocalProvider{masterKey: key}, nil
 }
 
-// NewLocalProviderFromKey creates a LocalProvider directly from a key byte slice.
-// This is useful for testing.
-func NewLocalProviderFromKey(key []byte) (*LocalProvider, error) {
+// newLocalProviderFromKey creates a LocalProvider directly from a key byte slice.
+func newLocalProviderFromKey(key []byte) (*LocalProvider, error) {
 	if len(key) != 32 {
 		return nil, errors.New("key must be 32 bytes")
 	}
@@ -51,8 +46,7 @@ func (p *LocalProvider) GetKey(keyID string) ([]byte, error) {
 	return p.masterKey, nil
 }
 
-// EncryptKey returns the key as-is. For local provider, the key is not
-// further encrypted (this is not recommended for production).
+// EncryptKey returns the key as-is.
 func (p *LocalProvider) EncryptKey(key []byte, keyID string) ([]byte, error) {
 	return key, nil
 }
@@ -67,7 +61,7 @@ func (p *LocalProvider) KeyID() string {
 	return "local-master"
 }
 
-// MasterKey returns a copy of the master key for backup purposes.
+// MasterKey returns a copy of the master key.
 func (p *LocalProvider) MasterKey() []byte {
 	result := make([]byte, len(p.masterKey))
 	copy(result, p.masterKey)
