@@ -39,12 +39,12 @@ func newAWSKMSProvider(ctx context.Context, keyID string) (*AWSKMSProvider, erro
 }
 
 // newAWSKMSProviderFromEnv creates a new AWSKMSProvider using the AWS_KMS_KEY_ID environment variable.
-func newAWSKMSProviderFromEnv(ctx context.Context) (*AWSKMSProvider, error) {
+func newAWSKMSProviderFromEnv() (*AWSKMSProvider, error) {
 	keyID := os.Getenv("AWS_KMS_KEY_ID")
 	if keyID == "" {
 		return nil, errors.New("AWS_KMS_KEY_ID environment variable is not set")
 	}
-	return newAWSKMSProvider(ctx, keyID)
+	return newAWSKMSProvider(context.Background(), keyID)
 }
 
 // GetKey generates and returns a data key for encryption.

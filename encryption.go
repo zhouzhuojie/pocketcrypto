@@ -1,7 +1,6 @@
 package pocketcrypto
 
 import (
-	"context"
 	"fmt"
 	"log"
 
@@ -144,16 +143,16 @@ func newEncryptionHooksFromConfig(
 //
 // Example:
 //
-//	hooks, err := pocketcrypto.Register(ctx, app, &pocketcrypto.MLKEM768{},
+//	hooks, err := pocketcrypto.Register(app, &pocketcrypto.MLKEM768{},
 //	    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
 //	    pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
 //	)
-func Register(ctx context.Context, app any, encrypter Encrypter, configs ...CollectionConfig) (*EncryptionHooks, error) {
+func Register(app any, encrypter Encrypter, configs ...CollectionConfig) (*EncryptionHooks, error) {
 	if len(configs) == 0 {
 		return nil, fmt.Errorf("at least one collection config is required")
 	}
 
-	provider, err := newProvider(ctx, "")
+	provider, err := newProvider("")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create key provider: %w", err)
 	}

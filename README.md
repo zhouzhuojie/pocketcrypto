@@ -1,106 +1,105 @@
 # PocketCrypto - Column-Level Encryption for PocketBase
 
-A Go library providing column-level encryption at rest for PocketBase applications, with support for AES-256-GCM authenticated encryption, post-quantum ML-KEM-768 key encapsulation, and multiple key management providers.
+A Go library providing column-level encryption at rest for PocketBase applications.
 
-## Features
-
-- **Post-Quantum ML-KEM-768** (Default): FIPS 203 compliant key encapsulation using Go 1.24's `crypto/mlkem`
-- **AES-256-GCM Encryption**: Industry-standard authenticated encryption for sensitive data
-- **Multiple Key Providers**: Local (env var), AWS KMS, and HashiCorp Vault support
-- **PocketBase Hooks Integration**: Automatic encryption on create/update, decryption on view
-- **Key Rotation**: Lazy rotation (on-read) and batch rotation for proactive migration
-- **Batch Processing**: Efficient batch processing with configurable size for large datasets
-
-## Installation
-
-```bash
-go get github.com/yourusername/pocketcrypto
-```
-
-## Quick Start
+## One-Call Setup
 
 ```go
-package main
-
-import (
-    "context"
-    "log"
-    "os"
-
-    "github.com/pocketbase/pocketbase"
-    "github.com/yourusername/pocketcrypto"
+_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
+    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
+    pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
 )
-
-func main() {
-    os.Setenv("ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
-
-    app := pocketbase.New()
-
-    _, err := pocketcrypto.Register(context.Background(), app, &pocketcrypto.MLKEM768{},
-        pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic", "seed_phrase"}},
-        pocketcrypto.CollectionConfig{Collection: "accounts", Fields: []string{"api_key", "api_secret"}},
-        pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    app.Start()
-}
 ```
 
-## Generating Encryption Keys
+## Key Providers
 
-### Local Provider (Environment Variable)
+### Local Provider (Default)
 
-The local provider requires a 32-byte (256-bit) key encoded in base64:
+Simple environment variable-based key management. Best for development.
 
 ```bash
-# Generate a random 32-byte key and encode it
+# Generate a 32-byte key
 openssl rand -base64 32
-# Example output: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+# Example: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 
-# Set the environment variable
+# Set environment variable
 export ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 ```
 
-### ML-KEM-768 Key Generation
-
-For post-quantum encryption, generate a key pair:
-
 ```go
-import "github.com/yourusername/pocketcrypto"
-
-// Generate a new ML-KEM-768 key pair
-mlkem, err := pocketcrypto.NewMLKEM768()
-if err != nil {
-    log.Fatal(err)
-}
-
-// Store the decapsulation key securely (for decryption)
-decapsulationKey := mlkem.DecapsulationKeyBytes()
-
-// Share the encapsulation key with parties that need to encrypt data
-encapsulationKey := mlkem.EncapsulationKeyBytes()
+// Uses ENCRYPTION_KEY automatically
+_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
+    pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
+)
 ```
 
-### From Seed (Deterministic Key Generation)
+### AWS KMS Provider
 
-Generate a key pair from a seed for reproducible key derivation:
+Managed key service with automatic key rotation and audit logging.
+
+```bash
+# Create a KMS key
+aws kms create-key --key-spec AES_256 --origin AWS_KMS
+# Note the KeyId and create an alias
+
+# Set environment variables
+export KEY_PROVIDER="aws-kms"
+export AWS_KMS_KEY_ID="alias/pocketcrypto-key"
+# AWS credentials from environment, ~/.aws/credentials, or IAM role
+```
 
 ```go
-import "github.com/yourusername/pocketcrypto"
+// Configure via environment - KEY_PROVIDER=aws-kms, AWS_KMS_KEY_ID=...
+_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
+    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key"}},
+)
+```
 
-// Seed must be 64 bytes of random data
-seed := make([]byte, 64)
-if _, err := rand.Read(seed); err != nil {
-    log.Fatal(err)
-}
+### HashiCorp Vault Provider
 
-mlkem, err := pocketcrypto.NewMLKEM768FromSeed(seed)
-if err != nil {
-    log.Fatal(err)
-}
+Enterprise secrets management with fine-grained access control.
+
+```bash
+# Start Vault
+vault server -dev
+export VAULT_ADDR="http://127.0.0.1:8200"
+export VAULT_TOKEN="dev-token"
+
+# Store encryption key
+vault kv put secret/pocketcrypto key="$(openssl rand -base64 32)"
+
+# Configure provider
+export KEY_PROVIDER="vault"
+export VAULT_TOKEN="your-token"
+```
+
+```go
+// Configure via environment - KEY_PROVIDER=vault, VAULT_TOKEN=...
+_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
+    pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"api_key"}},
+)
+```
+
+## Encryption Algorithms
+
+### AES-256-GCM
+
+Fast, industry-standard encryption for most use cases.
+
+```go
+_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
+    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key"}},
+)
+```
+
+### ML-KEM-768
+
+Post-quantum encryption. Slower but protects against future quantum attacks.
+
+```go
+_, err := pocketcrypto.Register(app, &pocketcrypto.MLKEM768{},
+    pocketcrypto.CollectionConfig{Collection: "high_value", Fields: []string{"seed_phrase"}},
+)
 ```
 
 ## Architecture

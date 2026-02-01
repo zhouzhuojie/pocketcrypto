@@ -2,7 +2,6 @@ package pocketcrypto
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"testing"
 
@@ -17,7 +16,7 @@ func TestNewProvider(t *testing.T) {
 		os.Setenv("ENCRYPTION_KEY", validKey)
 		defer os.Unsetenv("ENCRYPTION_KEY")
 
-		provider, err := newProvider(context.Background(), "")
+		provider, err := newProvider("")
 		require.NoError(t, err)
 		assert.NotNil(t, provider)
 	})
@@ -26,13 +25,13 @@ func TestNewProvider(t *testing.T) {
 		os.Setenv("ENCRYPTION_KEY", validKey)
 		defer os.Unsetenv("ENCRYPTION_KEY")
 
-		provider, err := newProvider(context.Background(), ProviderTypeLocal)
+		provider, err := newProvider(ProviderTypeLocal)
 		require.NoError(t, err)
 		assert.NotNil(t, provider)
 	})
 
 	t.Run("unknown provider type", func(t *testing.T) {
-		_, err := newProvider(context.Background(), "unknown")
+		_, err := newProvider("unknown")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown")
 	})

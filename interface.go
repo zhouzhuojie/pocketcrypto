@@ -96,7 +96,7 @@ func (e *unknownProviderTypeError) Error() string {
 var errUnknownProviderType = &unknownProviderTypeError{}
 
 // newProvider creates a KeyProvider based on the specified type.
-func newProvider(ctx context.Context, providerType ProviderType) (KeyProvider, error) {
+func newProvider(providerType ProviderType) (KeyProvider, error) {
 	if providerType == "" {
 		providerType = ProviderType(os.Getenv("KEY_PROVIDER"))
 	}
@@ -109,7 +109,7 @@ func newProvider(ctx context.Context, providerType ProviderType) (KeyProvider, e
 	case ProviderTypeLocal:
 		return newLocalProvider()
 	case ProviderTypeAWSKMS:
-		return newAWSKMSProviderFromEnv(ctx)
+		return newAWSKMSProviderFromEnv()
 	case ProviderTypeVault:
 		return newVaultProvider()
 	default:
