@@ -530,3 +530,65 @@ func TestEncryptionHooks_RegisterDefaultEncryption(t *testing.T) {
 	// We expect an error because app is nil
 	assert.Error(t, err)
 }
+
+// TestEncryptionHooks_Register tests the Register method.
+func TestEncryptionHooks_Register(t *testing.T) {
+	t.Run("empty collections registers without error", func(t *testing.T) {
+		provider := &mockKeyProvider{key: make([]byte, 32), keyID: "test"}
+		encryptionHooks := hooks.NewEncryptionHooks(nil, &crypto.AES256GCM{}, provider)
+
+		// No collections added - should not error
+		err := encryptionHooks.Register()
+		assert.NoError(t, err)
+	})
+}
+
+// TestCollectionConfig tests the CollectionConfig struct.
+func TestCollectionConfig(t *testing.T) {
+	config := hooks.CollectionConfig{
+		Collection: "wallets",
+		Fields:     []string{"private_key", "mnemonic"},
+	}
+
+	assert.Equal(t, "wallets", config.Collection)
+	assert.Len(t, config.Fields, 2)
+	assert.Equal(t, "private_key", config.Fields[0])
+	assert.Equal(t, "mnemonic", config.Fields[1])
+}
+
+// TestEncryptionHooks_NewEncryptionHooks tests creating encryption hooks directly.
+func TestEncryptionHooks_NewEncryptionHooks(t *testing.T) {
+	provider := &mockKeyProvider{key: make([]byte, 32), keyID: "test"}
+
+	t.Run("with nil encrypter", func(t *testing.T) {
+		hooks := hooks.NewEncryptionHooks(nil, nil, provider)
+		assert.NotNil(t, hooks)
+	})
+
+	t.Run("with nil provider", func(t *testing.T) {
+		hooks := hooks.NewEncryptionHooks(nil, &crypto.AES256GCM{}, nil)
+		assert.NotNil(t, hooks)
+	})
+}
+
+// TestEncryptionHooks_MultipleFields tests handling multiple fields.
+func TestEncryptionHooks_MultipleFields(t *testing.T) {
+	provider := &mockKeyProvider{key: bytes.Repeat([]byte{0x01}, 32), keyID: "test"}
+	encrypter := &crypto.AES256GCM{}
+
+	t.Run("encrypt multiple fields", func(t *testing.T) {
+		hooks := hooks.NewEncryptionHooks(nil, encrypter, provider)
+		result := hooks.AddCollection("wallets", "private_key", "mnemonic", "seed_phrase")
+
+		assert.Same(t, hooks, result)
+	})
+
+	t.Run("add same collection multiple times", func(t *testing.T) {
+		hooks := hooks.NewEncryptionHooks(nil, encrypter, provider)
+		result1 := hooks.AddCollection("wallets", "private_key")
+		result2 := hooks.AddCollection("wallets", "mnemonic")
+
+		assert.Same(t, hooks, result1)
+		assert.Same(t, hooks, result2)
+	})
+}

@@ -60,6 +60,12 @@ func TestFactory_MustProvider(t *testing.T) {
 		provider := MustProvider(t.Context(), "local")
 		assert.NotNil(t, provider)
 	})
+
+	t.Run("panics with unknown provider", func(t *testing.T) {
+		assert.Panics(t, func() {
+			MustProvider(t.Context(), "unknown-provider")
+		})
+	})
 }
 
 func TestProviderType_String(t *testing.T) {

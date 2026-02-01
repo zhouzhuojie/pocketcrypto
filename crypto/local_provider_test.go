@@ -106,3 +106,46 @@ func TestLocalProvider_MasterKey(t *testing.T) {
 	assert.Equal(t, byte(0xAB), masterKey2[0], "internal key should be unchanged after modifying copy")
 	assert.NotEqual(t, masterKey1[0], masterKey2[0], "different copies should be independent")
 }
+
+func TestLocalProvider_NewLocalProviderFromKey(t *testing.T) {
+	t.Run("valid key", func(t *testing.T) {
+		key := bytes.Repeat([]byte{0xAB}, 32)
+		provider, err := NewLocalProviderFromKey(key)
+		require.NoError(t, err)
+		assert.NotNil(t, provider)
+		assert.Equal(t, "local-master", provider.KeyID())
+	})
+
+	t.Run("nil key", func(t *testing.T) {
+		_, err := NewLocalProviderFromKey(nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "32 bytes")
+	})
+
+	t.Run("key too short", func(t *testing.T) {
+		key := bytes.Repeat([]byte{0xAB}, 16)
+		_, err := NewLocalProviderFromKey(key)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "32 bytes")
+	})
+
+	t.Run("key too long", func(t *testing.T) {
+		key := bytes.Repeat([]byte{0xAB}, 64)
+		_, err := NewLocalProviderFromKey(key)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "32 bytes")
+	})
+
+	t.Run("key is copied", func(t *testing.T) {
+		key := bytes.Repeat([]byte{0xAB}, 32)
+		provider, err := NewLocalProviderFromKey(key)
+		require.NoError(t, err)
+
+		// Modify original key
+		key[0] = 0xFF
+
+		// Provider should still have original key
+		masterKey := provider.MasterKey()
+		assert.Equal(t, byte(0xAB), masterKey[0], "provider key should not be affected by modifying original")
+	})
+}

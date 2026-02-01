@@ -10,6 +10,13 @@ import (
 	"pocketcrypto/crypto"
 )
 
+// RecordLike is an interface for record-like objects that can be encrypted/decrypted.
+// This allows testing without a full PocketBase instance.
+type RecordLike interface {
+	GetString(field string) string
+	Set(field string, value any)
+}
+
 // EncryptionHooks registers encryption/decryption hooks for PocketBase.
 // This automatically encrypts sensitive fields before saving and decrypts
 // them when responding to API requests.
@@ -79,7 +86,7 @@ func (h *EncryptionHooks) registerCollectionHooks(collection string, fields []st
 }
 
 // encryptRecord encrypts the specified fields in a record.
-func (h *EncryptionHooks) encryptRecord(record *core.Record, fields []string) {
+func (h *EncryptionHooks) encryptRecord(record RecordLike, fields []string) {
 	for _, field := range fields {
 		value := record.GetString(field)
 		if value == "" || crypto.IsEncrypted(value) {
@@ -97,7 +104,7 @@ func (h *EncryptionHooks) encryptRecord(record *core.Record, fields []string) {
 }
 
 // decryptRecord decrypts the specified fields in a record.
-func (h *EncryptionHooks) decryptRecord(record *core.Record, fields []string) {
+func (h *EncryptionHooks) decryptRecord(record RecordLike, fields []string) {
 	for _, field := range fields {
 		value := record.GetString(field)
 		if value == "" || !crypto.IsEncrypted(value) {

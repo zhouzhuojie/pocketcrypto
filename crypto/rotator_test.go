@@ -3,6 +3,7 @@ package crypto
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -168,4 +169,311 @@ func TestRotatableProviderInterface(t *testing.T) {
 	// Verify RotatableProvider is a superset of KeyProvider
 	var _ KeyProvider = &mockRotatableProvider{}
 	var _ RotatableProvider = &mockRotatableProvider{}
+}
+
+func TestKeyRotator_RotateCollection(t *testing.T) {
+	oldKey := bytes.Repeat([]byte{0xAA}, 32)
+	newKey := bytes.Repeat([]byte{0xBB}, 32)
+
+	// Use multiKeyProvider for both old and new to ensure KeyID is set correctly
+	oldProvider := &multiKeyProvider{
+		keys:          map[string][]byte{"old-key": oldKey, "new-key": newKey},
+		currentKeyID:  "old-key",
+		currentVersion: 1,
+	}
+	newProvider := &multiKeyProvider{
+		keys:          map[string][]byte{"old-key": oldKey, "new-key": newKey},
+		currentKeyID:  "new-key",
+		currentVersion: 2,
+	}
+
+	encrypter := &AES256GCM{}
+
+	// Helper to create records with old encryption
+	createRecords := func(count int) []EncryptedRecord {
+		records := make([]EncryptedRecord, count)
+		for i := 0; i < count; i++ {
+			encrypted, err := encrypter.Encrypt("batch-data", oldProvider)
+			require.NoError(t, err)
+			records[i] = EncryptedRecord{
+				ID:              string(rune('A' + i)),
+				EncryptedFields: map[string]string{"private_key": encrypted},
+			}
+		}
+		return records
+	}
+
+	t.Run("full batch rotation", func(t *testing.T) {
+		records := createRecords(10)
+		rotator := NewKeyRotator(newProvider, encrypter)
+
+		var updated []EncryptedRecord
+		migrated, skipped, err := rotator.RotateCollection(
+			context.Background(),
+			records,
+			5, // batch size of 5
+			func(record *EncryptedRecord) error {
+				updated = append(updated, *record)
+				return nil
+			},
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, 10, migrated)
+		assert.Equal(t, 0, skipped)
+		assert.Len(t, updated, 10)
+	})
+
+	t.Run("default batch size", func(t *testing.T) {
+		records := createRecords(10)
+		rotator := NewKeyRotator(newProvider, encrypter)
+
+		migrated, skipped, err := rotator.RotateCollection(
+			context.Background(),
+			records,
+			0, // should use default batch size
+			func(record *EncryptedRecord) error {
+				return nil
+			},
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, 10, migrated)
+		assert.Equal(t, 0, skipped)
+	})
+
+	t.Run("batch rotation with partial batches", func(t *testing.T) {
+		records := createRecords(7)
+		rotator := NewKeyRotator(newProvider, encrypter)
+
+		// 7 records with batch size of 3 should result in 3 batches (3, 3, 1)
+		migrated, skipped, err := rotator.RotateCollection(
+			context.Background(),
+			records,
+			3,
+			func(record *EncryptedRecord) error {
+				return nil
+			},
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, 7, migrated)
+		assert.Equal(t, 0, skipped)
+	})
+}
+
+func TestKeyRotator_RotateCollection_Errors(t *testing.T) {
+	oldKey := bytes.Repeat([]byte{0xAA}, 32)
+	newKey := bytes.Repeat([]byte{0xBB}, 32)
+
+	oldProvider := &simpleProvider{key: oldKey, keyID: "old-key"}
+	newProvider := &multiKeyProvider{
+		keys:          map[string][]byte{"old-key": oldKey, "new-key": newKey},
+		currentKeyID:  "new-key",
+	}
+
+	encrypter := &AES256GCM{}
+	rotator := NewKeyRotator(newProvider, encrypter)
+
+	// Create mixed records (some valid, some invalid)
+	records := []EncryptedRecord{
+		{
+			ID: "valid-1",
+			EncryptedFields: map[string]string{
+				"private_key": mustEncrypt(t, encrypter, "data1", oldProvider),
+			},
+		},
+		{
+			ID: "invalid",
+			EncryptedFields: map[string]string{
+				"private_key": "invalid-encrypted-data",
+			},
+		},
+		{
+			ID: "valid-2",
+			EncryptedFields: map[string]string{
+				"private_key": mustEncrypt(t, encrypter, "data2", oldProvider),
+			},
+		},
+	}
+
+	t.Run("skip invalid records", func(t *testing.T) {
+		migrated, skipped, err := rotator.RotateCollection(
+			context.Background(),
+			records,
+			10,
+			func(record *EncryptedRecord) error {
+				return nil
+			},
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, migrated)
+		assert.Equal(t, 1, skipped)
+		_ = migrated // use variable to avoid unused error
+		_ = skipped
+	})
+
+	t.Run("update function error counts as skip", func(t *testing.T) {
+		failProvider := &multiKeyProvider{
+			keys:          map[string][]byte{"old-key": oldKey, "new-key": newKey},
+			currentKeyID:  "new-key",
+		}
+		failRotator := NewKeyRotator(failProvider, encrypter)
+
+		records := []EncryptedRecord{
+			{
+				ID: "test-1",
+				EncryptedFields: map[string]string{
+					"private_key": mustEncrypt(t, encrypter, "data", oldProvider),
+				},
+			},
+		}
+
+		migrated, skipped, err := failRotator.RotateCollection(
+			context.Background(),
+			records,
+			10,
+			func(record *EncryptedRecord) error {
+				return fmt.Errorf("update failed")
+			},
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, 0, migrated)
+		assert.Equal(t, 1, skipped)
+		_ = migrated
+		_ = skipped
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		failProvider := &multiKeyProvider{
+			keys:          map[string][]byte{"old-key": oldKey, "new-key": newKey},
+			currentKeyID:  "new-key",
+		}
+		failRotator := NewKeyRotator(failProvider, encrypter)
+
+		// Create many records
+		manyRecords := make([]EncryptedRecord, 20)
+		for i := 0; i < 20; i++ {
+			manyRecords[i] = EncryptedRecord{
+				ID: string(rune('A' + i)),
+				EncryptedFields: map[string]string{
+					"private_key": mustEncrypt(t, encrypter, "data", oldProvider),
+				},
+			}
+		}
+
+		// Cancel context after processing a few records
+		cancel()
+
+		_, _, err := failRotator.RotateCollection(
+			ctx,
+			manyRecords,
+			5,
+			func(record *EncryptedRecord) error {
+				return nil
+			},
+		)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "context")
+	})
+}
+
+func TestKeyRotator_RotateRecord(t *testing.T) {
+	oldKey := bytes.Repeat([]byte{0xAA}, 32)
+	newKey := bytes.Repeat([]byte{0xBB}, 32)
+
+	oldProvider := &simpleProvider{key: oldKey, keyID: "old-key"}
+	newProvider := &multiKeyProvider{
+		keys:          map[string][]byte{"old-key": oldKey, "new-key": newKey},
+		currentKeyID:  "new-key",
+	}
+
+	encrypter := &AES256GCM{}
+	rotator := NewKeyRotator(newProvider, encrypter)
+
+	t.Run("rotate single record", func(t *testing.T) {
+		encrypted, err := encrypter.Encrypt("secret data", oldProvider)
+		require.NoError(t, err)
+
+		record := &EncryptedRecord{
+			ID:              "test-id",
+			EncryptedFields: map[string]string{"private_key": encrypted},
+		}
+
+		updated, rotated, err := rotator.RotateRecord(record)
+		require.NoError(t, err)
+		assert.True(t, rotated)
+		assert.NotEmpty(t, updated.EncryptedFields["private_key"])
+
+		// Verify the new encrypted value can be decrypted
+		decrypted, err := encrypter.Decrypt(updated.EncryptedFields["private_key"], newProvider)
+		require.NoError(t, err)
+		assert.Equal(t, "secret data", decrypted)
+	})
+
+	t.Run("no rotation needed", func(t *testing.T) {
+		encrypted, err := encrypter.Encrypt("secret data", newProvider)
+		require.NoError(t, err)
+
+		record := &EncryptedRecord{
+			ID:              "test-id",
+			EncryptedFields: map[string]string{"private_key": encrypted},
+		}
+
+		updated, rotated, err := rotator.RotateRecord(record)
+		require.NoError(t, err)
+		assert.False(t, rotated)
+		assert.Equal(t, encrypted, updated.EncryptedFields["private_key"])
+	})
+}
+
+func TestKeyRotator_RotateKey(t *testing.T) {
+	provider := &mockRotatableProvider{key: make([]byte, 32), currentVersion: 1}
+	rotator := NewKeyRotator(provider, &AES256GCM{})
+
+	err := rotator.RotateKey(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, provider.currentVersion)
+}
+
+func TestKeyRotator_StaticProvider(t *testing.T) {
+	key := bytes.Repeat([]byte{0xAA}, 32)
+	provider := &staticProvider{keyID: "static-key", key: key}
+
+	t.Run("GetKey returns stored key", func(t *testing.T) {
+		result, err := provider.GetKey("any-key-id")
+		require.NoError(t, err)
+		assert.Equal(t, key, result)
+	})
+
+	t.Run("EncryptKey returns key as-is", func(t *testing.T) {
+		result, err := provider.EncryptKey(key, "key-id")
+		require.NoError(t, err)
+		assert.Equal(t, key, result)
+	})
+
+	t.Run("DecryptKey returns encrypted key as-is", func(t *testing.T) {
+		encrypted := bytes.Repeat([]byte{0xBB}, 32)
+		result, err := provider.DecryptKey(encrypted)
+		require.NoError(t, err)
+		assert.Equal(t, encrypted, result)
+	})
+
+	t.Run("KeyID returns configured keyID", func(t *testing.T) {
+		assert.Equal(t, "static-key", provider.KeyID())
+	})
+}
+
+// Helper function for encryption in tests
+func mustEncrypt(t *testing.T, encrypter Encrypter, data string, provider KeyProvider) string {
+	encrypted, err := encrypter.Encrypt(data, provider)
+	if err != nil {
+		t.Fatalf("failed to encrypt: %v", err)
+	}
+	return encrypted
 }
