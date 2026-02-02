@@ -3,7 +3,7 @@
 Column-level encryption for PocketBase with post-quantum ML-KEM-768 support.
 
 ```go
-_, err := pocketcrypto.Register(app, pocketcrypto.NewMLKEM768(),
+_, err := pocketcrypto.Register(app, &pocketcrypto.MLKEM768{},
     pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
 )
 ```
@@ -18,10 +18,16 @@ go get github.com/zhouzhuojie/pocketcrypto
 import "github.com/zhouzhuojie/pocketcrypto"
 
 // One-line setup with automatic hook registration
-_, err := pocketcrypto.Register(app, pocketcrypto.NewMLKEM768(),
+_, err := pocketcrypto.Register(app, &pocketcrypto.MLKEM768{},
     pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
     pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
 )
+```
+
+Set the `ENCRYPTION_KEY` environment variable (32 bytes, base64 encoded):
+
+```bash
+export ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
 
 ## Example

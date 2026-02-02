@@ -19,12 +19,9 @@ func main() {
 	app := pocketbase.New()
 
 	// Configure encryption with ML-KEM-768 (post-quantum)
+	// Uses ENCRYPTION_KEY environment variable
 	fmt.Println(">>> CALLING Register <<<")
-	encrypter, err := pocketcrypto.NewMLKEM768()
-	if err != nil {
-		log.Fatalf("Failed to create ML-KEM-768 encrypter: %v", err)
-	}
-	hooks, err := pocketcrypto.Register(app, encrypter,
+	hooks, err := pocketcrypto.Register(app, &pocketcrypto.MLKEM768{},
 		pocketcrypto.CollectionConfig{
 			Collection: "wallets",
 			Fields:     []string{"private_key", "mnemonic"},

@@ -3,53 +3,66 @@ package pocketcrypto
 import (
 	"bytes"
 	"crypto/mlkem"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestMLKEM768_KeyGeneration(t *testing.T) {
-	t.Run("generate new key pair", func(t *testing.T) {
-		encrypter, err := newMLKEM768()
+const testKey = "dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcyEhISE=" // 32 bytes base64
+
+func TestMLKEM768_New(t *testing.T) {
+	t.Run("creates MLKEM768 from ENCRYPTION_KEY", func(t *testing.T) {
+		os.Setenv("ENCRYPTION_KEY", testKey)
+		defer os.Unsetenv("ENCRYPTION_KEY")
+
+		encrypter := &MLKEM768{}
+		_, err := encrypter.Encrypt("test", nil)
 		require.NoError(t, err)
-		assert.NotNil(t, encrypter)
 
-		// Verify encapsulation key is generated
-		encapKey := encrypter.EncapsulationKey()
-		assert.NotNil(t, encapKey)
-		assert.Equal(t, mlkem.EncapsulationKeySize768, len(encapKey))
-
-		// Verify decapsulation key is generated
-		decapKey := encrypter.SecretKey()
-		assert.NotNil(t, decapKey)
+		// Verify key is generated
+		assert.NotNil(t, encrypter.EncapsulationKey())
+		assert.NotNil(t, encrypter.SecretKey())
+		assert.Equal(t, mlkem.EncapsulationKeySize768, len(encrypter.EncapsulationKey()))
 	})
 
-	t.Run("generate key pair from seed", func(t *testing.T) {
-		seed := bytes.Repeat([]byte{0x01}, 64)
-		encrypter, err := newMLKEM768FromSeed(seed)
-		require.NoError(t, err)
-		assert.NotNil(t, encrypter)
-	})
+	t.Run("fails without ENCRYPTION_KEY", func(t *testing.T) {
+		os.Unsetenv("ENCRYPTION_KEY")
+		defer os.Unsetenv("ENCRYPTION_KEY")
 
-	t.Run("encrypt without key fails", func(t *testing.T) {
 		encrypter := &MLKEM768{}
 		_, err := encrypter.Encrypt("test", nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "encapsulation key not initialized")
+		assert.Contains(t, err.Error(), "ENCRYPTION_KEY")
 	})
 
-	t.Run("decrypt without key fails", func(t *testing.T) {
+	t.Run("fails with invalid base64 in ENCRYPTION_KEY", func(t *testing.T) {
+		os.Setenv("ENCRYPTION_KEY", "not-valid-base64!!!")
+		defer os.Unsetenv("ENCRYPTION_KEY")
+
 		encrypter := &MLKEM768{}
-		_, err := encrypter.Decrypt("invalid", nil)
+		_, err := encrypter.Encrypt("test", nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "decapsulation key not initialized")
+		assert.Contains(t, err.Error(), "invalid base64")
+	})
+
+	t.Run("fails with wrong key size", func(t *testing.T) {
+		os.Setenv("ENCRYPTION_KEY", "dGVzdC1rZXktMTYtYnl0ZXM=") // 16 bytes
+		defer os.Unsetenv("ENCRYPTION_KEY")
+
+		encrypter := &MLKEM768{}
+		_, err := encrypter.Encrypt("test", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "32 bytes")
 	})
 }
 
 func TestMLKEM768_EncryptDecrypt(t *testing.T) {
-	encrypter, err := newMLKEM768()
-	require.NoError(t, err)
+	os.Setenv("ENCRYPTION_KEY", testKey)
+	defer os.Unsetenv("ENCRYPTION_KEY")
+
+	encrypter := &MLKEM768{}
 	provider := &mockKeyProvider{key: make([]byte, 32), keyID: "mlkem-key"}
 
 	t.Run("encrypt and decrypt basic data", func(t *testing.T) {
@@ -92,7 +105,11 @@ func TestMLKEM768_EncryptDecrypt(t *testing.T) {
 }
 
 func TestMLKEM768_AlgorithmInfo(t *testing.T) {
-	encrypter, err := newMLKEM768()
+	os.Setenv("ENCRYPTION_KEY", testKey)
+	defer os.Unsetenv("ENCRYPTION_KEY")
+
+	encrypter := &MLKEM768{}
+	_, err := encrypter.Encrypt("test", nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "ML-KEM-768", encrypter.Algorithm())
@@ -100,36 +117,29 @@ func TestMLKEM768_AlgorithmInfo(t *testing.T) {
 	assert.Equal(t, mlkem.EncapsulationKeySize768, len(encrypter.EncapsulationKey()))
 }
 
-func TestMLKEM768_KeyPersistence(t *testing.T) {
-	t.Run("same seed produces same key pair", func(t *testing.T) {
-		seed := bytes.Repeat([]byte{0x42}, 64)
+func TestMLKEM768_KeyDeterminism(t *testing.T) {
+	// Same ENCRYPTION_KEY should produce the same ML-KEM key pair
+	os.Setenv("ENCRYPTION_KEY", testKey)
+	defer os.Unsetenv("ENCRYPTION_KEY")
 
-		encrypter1, err := newMLKEM768FromSeed(seed)
-		require.NoError(t, err)
+	encrypter1 := &MLKEM768{}
+	_, err := encrypter1.Encrypt("init1", nil)
+	require.NoError(t, err)
 
-		encrypter2, err := newMLKEM768FromSeed(seed)
-		require.NoError(t, err)
+	encrypter2 := &MLKEM768{}
+	_, err = encrypter2.Encrypt("init2", nil)
+	require.NoError(t, err)
 
-		assert.Equal(t, encrypter1.EncapsulationKey(), encrypter2.EncapsulationKey())
-		assert.Equal(t, encrypter1.SecretKey(), encrypter2.SecretKey())
-	})
-
-	t.Run("different seeds produce different key pairs", func(t *testing.T) {
-		seed1 := bytes.Repeat([]byte{0x01}, 64)
-		seed2 := bytes.Repeat([]byte{0x02}, 64)
-
-		encrypter1, err := newMLKEM768FromSeed(seed1)
-		require.NoError(t, err)
-
-		encrypter2, err := newMLKEM768FromSeed(seed2)
-		require.NoError(t, err)
-
-		assert.NotEqual(t, encrypter1.EncapsulationKey(), encrypter2.EncapsulationKey())
-	})
+	assert.Equal(t, encrypter1.EncapsulationKey(), encrypter2.EncapsulationKey())
+	assert.Equal(t, encrypter1.SecretKey(), encrypter2.SecretKey())
 }
 
 func BenchmarkMLKEM768(b *testing.B) {
-	encrypter, err := newMLKEM768()
+	os.Setenv("ENCRYPTION_KEY", testKey)
+	defer os.Unsetenv("ENCRYPTION_KEY")
+
+	encrypter := &MLKEM768{}
+	_, err := encrypter.Encrypt("bench", nil)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -184,7 +194,8 @@ func BenchmarkMLKEM768(b *testing.B) {
 			_, _ = encrypter.encapKey.Encapsulate()
 			// Re-create encrypter since Encapsulate consumes the key
 			if i%1000 == 0 && i > 0 {
-				encrypter, _ = newMLKEM768()
+				encrypter = &MLKEM768{}
+				_, _ = encrypter.Encrypt("bench", nil)
 			}
 		}
 	})
