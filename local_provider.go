@@ -58,18 +58,6 @@ func newLocalProviderFromKey(key []byte) (*LocalProvider, error) {
 	return &LocalProvider{masterKey: keyCopy}, nil
 }
 
-// newLocalProviderWithPrevious creates a provider with both current and previous keys.
-func newLocalProviderWithPrevious(current, previous []byte) (*LocalProvider, error) {
-	if len(current) != 32 || len(previous) != 32 {
-		return nil, errors.New("keys must be 32 bytes")
-	}
-
-	return &LocalProvider{
-		masterKey:   current,
-		previousKey: previous,
-	}, nil
-}
-
 // GetKey retrieves the encryption key.
 // For lazy rotation: returns current master key by default.
 // Falls back to previous key if the keyID is "previous".

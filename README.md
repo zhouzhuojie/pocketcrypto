@@ -1,9 +1,9 @@
 # PocketCrypto
 
-Column-level encryption for PocketBase.
+Column-level encryption for PocketBase with post-quantum ML-KEM-768 support.
 
 ```go
-_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
+_, err := pocketcrypto.Register(app, pocketcrypto.NewMLKEM768(),
     pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
 )
 ```
@@ -17,11 +17,79 @@ go get github.com/zhouzhuojie/pocketcrypto
 ```go
 import "github.com/zhouzhuojie/pocketcrypto"
 
-_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
+// One-line setup with automatic hook registration
+_, err := pocketcrypto.Register(app, pocketcrypto.NewMLKEM768(),
     pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
     pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
 )
 ```
+
+## Example
+
+See [examples/simple/](examples/simple/) for a complete working example:
+
+```bash
+cd examples/simple
+go run main.go
+```
+
+The example demonstrates:
+- Setting up PocketBase with encryption hooks
+- Configuring ML-KEM-768 post-quantum encryption
+- Registering the admin API for field encryption migration
+
+## Gradual Field Encryption Opt-in
+
+Existing plaintext fields can be gradually migrated to encrypted format without downtime:
+
+### 1. Register the Admin API
+
+```go
+pocketcrypto.RegisterDefaultFieldEncryptionAPI(app)
+```
+
+### 2. Check Encryption Status
+
+```bash
+curl http://localhost:8090/api/field-encryption/status/wallets \
+  -H "Authorization: YOUR_ADMIN_TOKEN"
+```
+
+### 3. Dry-Run First (Preview)
+
+```bash
+curl -X POST http://localhost:8090/api/field-encryption/dry-run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: YOUR_ADMIN_TOKEN" \
+  -d '{
+    "collection": "wallets",
+    "fields": ["private_key"],
+    "batch_size": 100
+  }'
+```
+
+Response shows how many records would be migrated without making changes.
+
+### 4. Apply Encryption
+
+```bash
+curl -X POST http://localhost:8090/api/field-encryption/apply \
+  -H "Content-Type: application/json" \
+  -H "Authorization: YOUR_ADMIN_TOKEN" \
+  -d '{
+    "collection": "wallets",
+    "fields": ["private_key"],
+    "batch_size": 100
+  }'
+```
+
+### Key Behaviors
+
+- **Already encrypted fields**: Skipped
+- **Empty/null fields**: Skipped
+- **Plaintext fields**: Encrypted and updated
+- **Mixed state supported**: Read path handles both encrypted and plaintext
+- **Batch processing**: Configurable batch size (default 100)
 
 ## Providers
 
@@ -95,18 +163,26 @@ Write Record → Encrypt with current key → Save
 
 ### Proactive Batch Migration
 
-For faster migration or zero reads:
+For faster migration or zero reads on first access, use the admin API:
+
+```bash
+# Preview changes (dry-run)
+curl -X POST http://localhost:8090/api/field-encryption/dry-run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: YOUR_ADMIN_TOKEN" \
+  -d '{"collection": "wallets", "fields": ["private_key"], "batch_size": 100}'
+
+# Apply encryption
+curl -X POST http://localhost:8090/api/field-encryption/apply \
+  -H "Content-Type: application/json" \
+  -H "Authorization: YOUR_ADMIN_TOKEN" \
+  -d '{"collection": "wallets", "fields": ["private_key"], "batch_size": 100}'
+```
+
+Or register the API in your app:
 
 ```go
-rotator := pocketcrypto.NewKeyRotator(provider, &pocketcrypto.AES256GCM{})
-
-migrated, skipped, err := rotator.RotateAll(
-    ctx,
-    allRecords,
-    func(r *EncryptedRecord) error {
-        return db.Save(r.ID, r.EncryptedFields)
-    },
-)
+pocketcrypto.RegisterDefaultFieldEncryptionAPI(app)
 ```
 
 ### Rotation Checklist

@@ -49,15 +49,6 @@ func newVaultProvider() (*VaultProvider, error) {
 	}, nil
 }
 
-// newVaultProviderWithClient creates a VaultProvider with an existing client.
-func newVaultProviderWithClient(client *vaultapi.Client, mountPath, keyPath string) *VaultProvider {
-	return &VaultProvider{
-		client:    client,
-		mountPath: mountPath,
-		keyPath:   keyPath,
-	}
-}
-
 // GetKey retrieves the encryption key from Vault.
 func (p *VaultProvider) GetKey(keyID string) ([]byte, error) {
 	secret, err := p.client.Logical().Read(p.mountPath + "/" + p.keyPath)

@@ -2,7 +2,6 @@ package pocketcrypto
 
 import (
 	"crypto/mlkem"
-	"crypto/rand"
 	"encoding/base64"
 	"errors"
 )
@@ -13,8 +12,24 @@ type MLKEM768 struct {
 	encapKey  *mlkem.EncapsulationKey768
 }
 
+// EncapsulationKey returns the public encapsulation key for sharing.
+func (m *MLKEM768) EncapsulationKey() []byte {
+	if m.encapKey == nil {
+		return nil
+	}
+	return m.encapKey.Bytes()
+}
+
+// SecretKey returns the secret decapsulation key for secure storage.
+func (m *MLKEM768) SecretKey() []byte {
+	if m.decapsKey == nil {
+		return nil
+	}
+	return m.decapsKey.Bytes()
+}
+
 // NewMLKEM768 generates a new ML-KEM-768 key pair.
-func newMLKEM768() (*MLKEM768, error) {
+func NewMLKEM768() (*MLKEM768, error) {
 	dk, err := mlkem.GenerateKey768()
 	if err != nil {
 		return nil, err
@@ -25,8 +40,13 @@ func newMLKEM768() (*MLKEM768, error) {
 	}, nil
 }
 
+// newMLKEM768 is the internal implementation.
+func newMLKEM768() (*MLKEM768, error) {
+	return NewMLKEM768()
+}
+
 // NewMLKEM768FromSeed creates an ML-KEM-768 key pair from a seed.
-func newMLKEM768FromSeed(seed []byte) (*MLKEM768, error) {
+func NewMLKEM768FromSeed(seed []byte) (*MLKEM768, error) {
 	dk, err := mlkem.NewDecapsulationKey768(seed)
 	if err != nil {
 		return nil, err
@@ -35,6 +55,11 @@ func newMLKEM768FromSeed(seed []byte) (*MLKEM768, error) {
 		decapsKey: dk,
 		encapKey:  dk.EncapsulationKey(),
 	}, nil
+}
+
+// newMLKEM768FromSeed is the internal implementation.
+func newMLKEM768FromSeed(seed []byte) (*MLKEM768, error) {
+	return NewMLKEM768FromSeed(seed)
 }
 
 // Algorithm returns the name of the encryption algorithm.
@@ -53,11 +78,6 @@ func (m *MLKEM768) Encrypt(plaintext string, provider KeyProvider) (string, erro
 		return "", errors.New("ML-KEM encapsulation key not initialized")
 	}
 
-	aesKey := make([]byte, 32)
-	if _, err := rand.Read(aesKey); err != nil {
-		return "", err
-	}
-
 	sharedSecret, ciphertext := m.encapKey.Encapsulate()
 
 	aes := &AES256GCM{}
@@ -70,6 +90,7 @@ func (m *MLKEM768) Encrypt(plaintext string, provider KeyProvider) (string, erro
 		Algorithm:    m.Algorithm(),
 		KeyID:        "",
 		EncryptedKey: base64.StdEncoding.EncodeToString(ciphertext),
+		Nonce:        "", // AES256GCM handles nonce internally
 		Ciphertext:   encrypted,
 		Version:      1,
 	}
@@ -102,33 +123,3 @@ func (m *MLKEM768) Decrypt(encrypted string, provider KeyProvider) (string, erro
 	return aes.DecryptWithKey(envelope.Ciphertext, sharedSecret)
 }
 
-// EncapsulationKeyBytes returns the public encapsulation key.
-func (m *MLKEM768) EncapsulationKeyBytes() []byte {
-	if m.encapKey == nil {
-		return nil
-	}
-	return m.encapKey.Bytes()
-}
-
-// DecapsulationKeyBytes returns the secret key for storage.
-func (m *MLKEM768) DecapsulationKeyBytes() []byte {
-	if m.decapsKey == nil {
-		return nil
-	}
-	return m.decapsKey.Bytes()
-}
-
-// EncapsulationKeySize returns the size of the encapsulation key.
-func (m *MLKEM768) EncapsulationKeySize() int {
-	return mlkem.EncapsulationKeySize768
-}
-
-// CiphertextSize returns the size of ML-KEM-768 ciphertext.
-func (m *MLKEM768) CiphertextSize() int {
-	return mlkem.CiphertextSize768
-}
-
-// SharedKeySize returns the size of the shared key.
-func (m *MLKEM768) SharedKeySize() int {
-	return mlkem.SharedKeySize
-}

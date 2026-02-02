@@ -2,17 +2,10 @@ package pocketcrypto
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 )
-
-// RecordLike is an interface for record-like objects that can be encrypted/decrypted.
-type RecordLike interface {
-	GetString(field string) string
-	Set(field string, value any)
-}
 
 // EncryptionHooks registers encryption/decryption hooks for PocketBase.
 // Supports automatic lazy key rotation - old data is re-encrypted on read.
@@ -78,12 +71,17 @@ func (h *EncryptionHooks) registerCollectionHooks(app *pocketbase.PocketBase, co
 		return e.Next()
 	})
 
-	log.Printf("registered encryption hooks for collection %s on fields %v", collection, fields)
 	return nil
 }
 
+// recordHelper interface for encrypting/decrypting record fields.
+type recordHelper interface {
+	GetString(field string) string
+	Set(field string, value any)
+}
+
 // encryptRecord encrypts the specified fields in a record.
-func (h *EncryptionHooks) encryptRecord(record RecordLike, fields []string) {
+func (h *EncryptionHooks) encryptRecord(record recordHelper, fields []string) {
 	for _, field := range fields {
 		value := record.GetString(field)
 		if value == "" || IsEncrypted(value) {
@@ -92,7 +90,6 @@ func (h *EncryptionHooks) encryptRecord(record RecordLike, fields []string) {
 
 		encrypted, err := h.encrypter.Encrypt(value, h.provider)
 		if err != nil {
-			log.Printf("encryption failed for field %s: %v", field, err)
 			continue
 		}
 
@@ -103,50 +100,42 @@ func (h *EncryptionHooks) encryptRecord(record RecordLike, fields []string) {
 // decryptRecord decrypts the specified fields in a record.
 // Supports lazy key rotation: if decryption with current key fails,
 // tries the previous key (if available) and re-encrypts with current key.
-func (h *EncryptionHooks) decryptRecord(record RecordLike, fields []string) {
+func (h *EncryptionHooks) decryptRecord(record recordHelper, fields []string) {
 	for _, field := range fields {
 		value := record.GetString(field)
 		if value == "" || !IsEncrypted(value) {
 			continue
 		}
 
-		decrypted, rotated, err := h.lazyDecrypt(value)
+		decrypted, err := h.lazyDecrypt(value)
 		if err != nil {
-			log.Printf("decryption failed for field %s: %v", field, err)
 			continue
 		}
 
-		// If rotated (was encrypted with old key), save the re-encrypted value
-		if rotated {
-			record.Set(field, decrypted) // decrypted contains the re-encrypted value
-		} else {
-			record.Set(field, decrypted)
-		}
+		record.Set(field, decrypted)
 	}
 }
 
 // lazyDecrypt attempts to decrypt data with the current key.
 // If that fails and a previous key exists, tries the previous key.
 // On success with previous key, re-encrypts with current key.
-//
-// Returns: (plaintext OR re-encrypted value, wasRotated, error)
-func (h *EncryptionHooks) lazyDecrypt(encrypted string) (string, bool, error) {
+func (h *EncryptionHooks) lazyDecrypt(encrypted string) (string, error) {
 	// Try current key first
 	plaintext, err := h.encrypter.Decrypt(encrypted, h.provider)
 	if err == nil {
-		return plaintext, false, nil
+		return plaintext, nil
 	}
 
 	// Try previous key if available
 	prevProvider, ok := h.provider.(interface{ GetKey(keyID string) ([]byte, error) })
 	if !ok {
-		return "", false, fmt.Errorf("decryption failed and provider doesn't support rotation: %w", err)
+		return "", fmt.Errorf("decryption failed and provider doesn't support rotation: %w", err)
 	}
 
 	// Try to get previous key
 	prevKey, err := prevProvider.GetKey("previous")
 	if err != nil || prevKey == nil {
-		return "", false, fmt.Errorf("decryption failed (no previous key): %w", err)
+		return "", fmt.Errorf("decryption failed (no previous key): %w", err)
 	}
 
 	// Create a temporary provider with previous key
@@ -155,27 +144,36 @@ func (h *EncryptionHooks) lazyDecrypt(encrypted string) (string, bool, error) {
 	// Try decrypt with previous key
 	plaintext, err = h.encrypter.Decrypt(encrypted, tempProvider)
 	if err != nil {
-		return "", false, fmt.Errorf("decryption failed with previous key: %w", err)
+		return "", fmt.Errorf("decryption failed with previous key: %w", err)
 	}
 
 	// Re-encrypt with current key (lazy rotation)
 	newEncrypted, err := h.encrypter.Encrypt(plaintext, h.provider)
 	if err != nil {
-		return "", false, fmt.Errorf("re-encryption failed during rotation: %w", err)
+		return "", fmt.Errorf("re-encryption failed during rotation: %w", err)
 	}
 
-	return newEncrypted, true, nil
+	return newEncrypted, nil
 }
 
-// newEncryptionHooksFromConfig creates encryption hooks from a configuration.
-func newEncryptionHooksFromConfig(
-	app any,
-	encrypter Encrypter,
-	provider KeyProvider,
-	configs []CollectionConfig,
-) (*EncryptionHooks, error) {
-	hooks := newEncryptionHooks(app, encrypter, provider)
+// Register registers encryption hooks for PocketBase with a one-call setup.
+//
+// This function registers hooks for both existing and future collections:
+//   - Existing collections are registered immediately
+//   - New collections created via the API are automatically detected and registered
+//
+// Example:
+//
+//	hooks, err := pocketcrypto.Register(app, pocketcrypto.NewMLKEM768(),
+//	    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
+//	    pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
+//	)
+func Register(app any, encrypter Encrypter, configs ...CollectionConfig) (*EncryptionHooks, error) {
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("at least one collection config is required")
+	}
 
+	// Validate configs
 	for _, cfg := range configs {
 		if cfg.Collection == "" {
 			return nil, fmt.Errorf("collection name cannot be empty")
@@ -183,23 +181,11 @@ func newEncryptionHooksFromConfig(
 		if len(cfg.Fields) == 0 {
 			return nil, fmt.Errorf("collection %s must have at least one field to encrypt", cfg.Collection)
 		}
-		hooks.AddCollection(cfg.Collection, cfg.Fields...)
 	}
 
-	return hooks, nil
-}
-
-// Register registers encryption hooks for PocketBase with a one-call setup.
-//
-// Example:
-//
-//	hooks, err := pocketcrypto.Register(app, &pocketcrypto.MLKEM768{},
-//	    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
-//	    pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
-//	)
-func Register(app any, encrypter Encrypter, configs ...CollectionConfig) (*EncryptionHooks, error) {
-	if len(configs) == 0 {
-		return nil, fmt.Errorf("at least one collection config is required")
+	pb, ok := app.(*pocketbase.PocketBase)
+	if !ok {
+		return nil, fmt.Errorf("app is not a PocketBase instance")
 	}
 
 	provider, err := newProvider("")
@@ -210,18 +196,58 @@ func Register(app any, encrypter Encrypter, configs ...CollectionConfig) (*Encry
 	hooks := newEncryptionHooks(app, encrypter, provider)
 
 	for _, cfg := range configs {
-		if cfg.Collection == "" {
-			return nil, fmt.Errorf("collection name cannot be empty")
-		}
-		if len(cfg.Fields) == 0 {
-			return nil, fmt.Errorf("collection %s must have at least one field to encrypt", cfg.Collection)
-		}
 		hooks.AddCollection(cfg.Collection, cfg.Fields...)
 	}
 
+	// Register hooks for configured collections
 	if err := hooks.Register(); err != nil {
 		return nil, fmt.Errorf("failed to register encryption hooks: %w", err)
 	}
 
+	// Build a filter from configs for dynamic registration
+	configMap := make(map[string][]string)
+	for _, cfg := range configs {
+		configMap[cfg.Collection] = cfg.Fields
+	}
+
+	// Register dynamic listener for future collections
+	hooks.registerDynamicCollections(pb, configMap)
+
 	return hooks, nil
+}
+
+// registerDynamicCollections listens for collection creation events.
+func (h *EncryptionHooks) registerDynamicCollections(app *pocketbase.PocketBase, configMap map[string][]string) {
+	registered := make(map[string]bool)
+
+	// Check existing collections on startup (only if DB is initialized)
+	if app.DB() != nil {
+		collections, _ := app.FindAllCollections()
+		for _, col := range collections {
+			if fields := configMap[col.Name]; len(fields) > 0 && !registered[col.Name] {
+				h.registerCollection(app, col.Name, fields...)
+				registered[col.Name] = true
+			}
+		}
+	}
+
+	// Listen for new collection creation
+	app.OnCollectionAfterCreateSuccess().BindFunc(func(e *core.CollectionEvent) error {
+		collectionName := e.Collection.Name
+		if fields := configMap[collectionName]; len(fields) > 0 && !registered[collectionName] {
+			h.registerCollection(app, collectionName, fields...)
+			registered[collectionName] = true
+		}
+		return nil
+	})
+}
+
+// registerCollection registers encryption hooks for a collection.
+func (h *EncryptionHooks) registerCollection(app *pocketbase.PocketBase, collection string, fields ...string) {
+	if _, exists := h.encryptFields[collection]; exists {
+		return
+	}
+	h.encryptFields[collection] = fields
+	h.decryptFields[collection] = fields
+	h.registerCollectionHooks(app, collection, fields)
 }

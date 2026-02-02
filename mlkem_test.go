@@ -16,12 +16,12 @@ func TestMLKEM768_KeyGeneration(t *testing.T) {
 		assert.NotNil(t, encrypter)
 
 		// Verify encapsulation key is generated
-		encapKey := encrypter.EncapsulationKeyBytes()
+		encapKey := encrypter.EncapsulationKey()
 		assert.NotNil(t, encapKey)
-		assert.Equal(t, encrypter.EncapsulationKeySize(), len(encapKey))
+		assert.Equal(t, mlkem.EncapsulationKeySize768, len(encapKey))
 
 		// Verify decapsulation key is generated
-		decapKey := encrypter.DecapsulationKeyBytes()
+		decapKey := encrypter.SecretKey()
 		assert.NotNil(t, decapKey)
 	})
 
@@ -97,9 +97,7 @@ func TestMLKEM768_AlgorithmInfo(t *testing.T) {
 
 	assert.Equal(t, "ML-KEM-768", encrypter.Algorithm())
 	assert.Equal(t, 32, encrypter.KeySize())
-	assert.Equal(t, mlkem.EncapsulationKeySize768, encrypter.EncapsulationKeySize())
-	assert.Equal(t, mlkem.CiphertextSize768, encrypter.CiphertextSize())
-	assert.Equal(t, mlkem.SharedKeySize, encrypter.SharedKeySize())
+	assert.Equal(t, mlkem.EncapsulationKeySize768, len(encrypter.EncapsulationKey()))
 }
 
 func TestMLKEM768_KeyPersistence(t *testing.T) {
@@ -112,8 +110,8 @@ func TestMLKEM768_KeyPersistence(t *testing.T) {
 		encrypter2, err := newMLKEM768FromSeed(seed)
 		require.NoError(t, err)
 
-		assert.Equal(t, encrypter1.EncapsulationKeyBytes(), encrypter2.EncapsulationKeyBytes())
-		assert.Equal(t, encrypter1.DecapsulationKeyBytes(), encrypter2.DecapsulationKeyBytes())
+		assert.Equal(t, encrypter1.EncapsulationKey(), encrypter2.EncapsulationKey())
+		assert.Equal(t, encrypter1.SecretKey(), encrypter2.SecretKey())
 	})
 
 	t.Run("different seeds produce different key pairs", func(t *testing.T) {
@@ -126,7 +124,7 @@ func TestMLKEM768_KeyPersistence(t *testing.T) {
 		encrypter2, err := newMLKEM768FromSeed(seed2)
 		require.NoError(t, err)
 
-		assert.NotEqual(t, encrypter1.EncapsulationKeyBytes(), encrypter2.EncapsulationKeyBytes())
+		assert.NotEqual(t, encrypter1.EncapsulationKey(), encrypter2.EncapsulationKey())
 	})
 }
 

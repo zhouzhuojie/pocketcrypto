@@ -121,10 +121,9 @@ func TestEncryptionHooks_LazyDecrypt(t *testing.T) {
 		encrypted, err := encrypter.Encrypt("test-data", provider)
 		require.NoError(t, err)
 
-		result, rotated, err := hooks.lazyDecrypt(encrypted)
+		result, err := hooks.lazyDecrypt(encrypted)
 		require.NoError(t, err)
 		assert.Equal(t, "test-data", result)
-		assert.False(t, rotated)
 	})
 
 	t.Run("lazy rotates with previous key", func(t *testing.T) {
@@ -138,9 +137,8 @@ func TestEncryptionHooks_LazyDecrypt(t *testing.T) {
 		require.NoError(t, err)
 
 		// Decrypt with provider that has both keys
-		result, rotated, err := hooks.lazyDecrypt(encrypted)
+		result, err := hooks.lazyDecrypt(encrypted)
 		require.NoError(t, err)
-		assert.True(t, rotated)
 		assert.NotEqual(t, encrypted, result)
 
 		// Verify the re-encrypted data can be decrypted with new key
@@ -160,7 +158,7 @@ func TestEncryptionHooks_LazyDecrypt(t *testing.T) {
 		encrypted, err := encrypter.Encrypt("unknown-data", diffProvider)
 		require.NoError(t, err)
 
-		_, _, err = hooks.lazyDecrypt(encrypted)
+		_, err = hooks.lazyDecrypt(encrypted)
 		assert.Error(t, err)
 	})
 }
@@ -199,23 +197,26 @@ func (p *testProvider) KeyID() string {
 	return p.currentKeyID
 }
 
-// mockRecord implements RecordLike for testing
+// mockRecord implements the record interface for testing
 type mockRecord struct {
-	fields map[string]string
+	fields map[string]any
 }
 
 func newMockRecord() *mockRecord {
 	return &mockRecord{
-		fields: make(map[string]string),
+		fields: make(map[string]any),
 	}
 }
 
 func (r *mockRecord) GetString(field string) string {
-	return r.fields[field]
+	if v, ok := r.fields[field]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 func (r *mockRecord) Set(field string, value any) {
-	if str, ok := value.(string); ok {
-		r.fields[field] = str
-	}
+	r.fields[field] = value
 }

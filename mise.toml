@@ -1,0 +1,24 @@
+[tasks]
+# Install mise if not available
+install-mise = "curl https://mise.run | sh"
+
+# Build all packages
+build = "go build ./..."
+
+# Run all tests
+test = "go test ./... -v"
+
+# Run example
+run-example = "cd examples/simple && go run main.go serve"
+
+# Format code
+fmt = "go fmt ./..."
+
+# Tidy modules
+tidy = '''
+go mod tidy
+cd examples/simple && go mod tidy
+'''
+
+# Full development setup
+setup = "task tidy"
