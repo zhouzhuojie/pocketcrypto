@@ -3,67 +3,16 @@ package pocketcrypto
 import (
 	"bytes"
 	"crypto/mlkem"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-const testKey = "dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcyEhISE=" // 32 bytes base64
-
-func TestMLKEM768_New(t *testing.T) {
-	t.Run("creates MLKEM768 from ENCRYPTION_KEY", func(t *testing.T) {
-		os.Setenv("ENCRYPTION_KEY", testKey)
-		defer os.Unsetenv("ENCRYPTION_KEY")
-
-		encrypter := &MLKEM768{}
-		_, err := encrypter.Encrypt("test", nil)
-		require.NoError(t, err)
-
-		// Verify key is generated
-		assert.NotNil(t, encrypter.EncapsulationKey())
-		assert.NotNil(t, encrypter.SecretKey())
-		assert.Equal(t, mlkem.EncapsulationKeySize768, len(encrypter.EncapsulationKey()))
-	})
-
-	t.Run("fails without ENCRYPTION_KEY", func(t *testing.T) {
-		os.Unsetenv("ENCRYPTION_KEY")
-		defer os.Unsetenv("ENCRYPTION_KEY")
-
-		encrypter := &MLKEM768{}
-		_, err := encrypter.Encrypt("test", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "ENCRYPTION_KEY")
-	})
-
-	t.Run("fails with invalid base64 in ENCRYPTION_KEY", func(t *testing.T) {
-		os.Setenv("ENCRYPTION_KEY", "not-valid-base64!!!")
-		defer os.Unsetenv("ENCRYPTION_KEY")
-
-		encrypter := &MLKEM768{}
-		_, err := encrypter.Encrypt("test", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid base64")
-	})
-
-	t.Run("fails with wrong key size", func(t *testing.T) {
-		os.Setenv("ENCRYPTION_KEY", "dGVzdC1rZXktMTYtYnl0ZXM=") // 16 bytes
-		defer os.Unsetenv("ENCRYPTION_KEY")
-
-		encrypter := &MLKEM768{}
-		_, err := encrypter.Encrypt("test", nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "32 bytes")
-	})
-}
-
 func TestMLKEM768_EncryptDecrypt(t *testing.T) {
-	os.Setenv("ENCRYPTION_KEY", testKey)
-	defer os.Unsetenv("ENCRYPTION_KEY")
-
+	key := bytes.Repeat([]byte{0x01}, 32)
+	provider := &mockKeyProvider{key: key, keyID: "mlkem-test"}
 	encrypter := &MLKEM768{}
-	provider := &mockKeyProvider{key: make([]byte, 32), keyID: "mlkem-key"}
 
 	t.Run("encrypt and decrypt basic data", func(t *testing.T) {
 		plaintext := "my-secret-data"
@@ -102,48 +51,124 @@ func TestMLKEM768_EncryptDecrypt(t *testing.T) {
 			assert.Equal(t, plaintext, decrypted)
 		}
 	})
+
+	t.Run("fails without provider", func(t *testing.T) {
+		_, err := encrypter.Encrypt("test", nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "key provider is required")
+	})
+
+	t.Run("fails with wrong key size", func(t *testing.T) {
+		wrongKeyProvider := &mockKeyProvider{key: bytes.Repeat([]byte{0x01}, 16), keyID: "wrong"}
+		_, err := encrypter.Encrypt("test", wrongKeyProvider)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "32 bytes")
+	})
+}
+
+func TestMLKEM768_KeyFromProvider(t *testing.T) {
+	key := bytes.Repeat([]byte{0xAB}, 32)
+	provider := &mockKeyProvider{key: key, keyID: "mlkem-key"}
+	encrypter := &MLKEM768{}
+
+	_, err := encrypter.Encrypt("test", provider)
+	require.NoError(t, err)
+
+	// Verify key is generated from provider key
+	assert.NotNil(t, encrypter.EncapsulationKey())
+	assert.NotNil(t, encrypter.SecretKey())
+	assert.Equal(t, mlkem.EncapsulationKeySize768, len(encrypter.EncapsulationKey()))
 }
 
 func TestMLKEM768_AlgorithmInfo(t *testing.T) {
-	os.Setenv("ENCRYPTION_KEY", testKey)
-	defer os.Unsetenv("ENCRYPTION_KEY")
-
+	key := bytes.Repeat([]byte{0x01}, 32)
+	provider := &mockKeyProvider{key: key, keyID: "mlkem-key"}
 	encrypter := &MLKEM768{}
-	_, err := encrypter.Encrypt("test", nil)
+
+	_, err := encrypter.Encrypt("test", provider)
 	require.NoError(t, err)
 
 	assert.Equal(t, "ML-KEM-768", encrypter.Algorithm())
 	assert.Equal(t, 32, encrypter.KeySize())
-	assert.Equal(t, mlkem.EncapsulationKeySize768, len(encrypter.EncapsulationKey()))
 }
 
 func TestMLKEM768_KeyDeterminism(t *testing.T) {
-	// Same ENCRYPTION_KEY should produce the same ML-KEM key pair
-	os.Setenv("ENCRYPTION_KEY", testKey)
-	defer os.Unsetenv("ENCRYPTION_KEY")
+	key := bytes.Repeat([]byte{0x42}, 32)
+	provider := &mockKeyProvider{key: key, keyID: "mlkem-key"}
 
 	encrypter1 := &MLKEM768{}
-	_, err := encrypter1.Encrypt("init1", nil)
+	_, err := encrypter1.Encrypt("init1", provider)
 	require.NoError(t, err)
 
 	encrypter2 := &MLKEM768{}
-	_, err = encrypter2.Encrypt("init2", nil)
+	_, err = encrypter2.Encrypt("init2", provider)
 	require.NoError(t, err)
 
+	// Same key should produce same ML-KEM key pair
 	assert.Equal(t, encrypter1.EncapsulationKey(), encrypter2.EncapsulationKey())
 	assert.Equal(t, encrypter1.SecretKey(), encrypter2.SecretKey())
 }
 
-func BenchmarkMLKEM768(b *testing.B) {
-	os.Setenv("ENCRYPTION_KEY", testKey)
-	defer os.Unsetenv("ENCRYPTION_KEY")
+func TestMLKEM768_KeyRotation(t *testing.T) {
+	currentKey := bytes.Repeat([]byte{0x02}, 32)
+	oldKey := bytes.Repeat([]byte{0x01}, 32)
+
+	// Create provider that can return both current and old keys
+	rotatableProvider := &rotatableTestProvider{
+		currentKey:  currentKey,
+		previousKey: oldKey,
+		currentID:   "mlkem-current",
+		previousID:  "mlkem-previous",
+	}
 
 	encrypter := &MLKEM768{}
-	_, err := encrypter.Encrypt("bench", nil)
+
+	// Encrypt with current key
+	plaintext := "rotating-data"
+	encrypted, err := encrypter.Encrypt(plaintext, rotatableProvider)
+	require.NoError(t, err)
+
+	// Verify we can decrypt with current key
+	decrypted, err := encrypter.Decrypt(encrypted, rotatableProvider)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
+}
+
+type rotatableTestProvider struct {
+	currentKey   []byte
+	previousKey  []byte
+	currentID    string
+	previousID   string
+}
+
+func (p *rotatableTestProvider) GetKey(keyID string) ([]byte, error) {
+	if keyID == "previous" && p.previousKey != nil {
+		return p.previousKey, nil
+	}
+	return p.currentKey, nil
+}
+
+func (p *rotatableTestProvider) EncryptKey(key []byte, keyID string) ([]byte, error) {
+	return key, nil
+}
+
+func (p *rotatableTestProvider) DecryptKey(encryptedKey []byte) ([]byte, error) {
+	return encryptedKey, nil
+}
+
+func (p *rotatableTestProvider) KeyID() string {
+	return p.currentID
+}
+
+func BenchmarkMLKEM768(b *testing.B) {
+	key := bytes.Repeat([]byte{0x01}, 32)
+	provider := &mockKeyProvider{key: key, keyID: "mlkem-key"}
+	encrypter := &MLKEM768{}
+
+	_, err := encrypter.Encrypt("bench", provider)
 	if err != nil {
 		b.Fatal(err)
 	}
-	provider := &mockKeyProvider{key: make([]byte, 32), keyID: "mlkem-key"}
 
 	testCases := []struct {
 		name string
@@ -185,17 +210,16 @@ func BenchmarkMLKEM768(b *testing.B) {
 		})
 	}
 
-	// Pure ML-KEM benchmark (encapsulate/decapsulate)
+	// Pure ML-KEM benchmark
 	b.Run("pure_encapsulate", func(b *testing.B) {
 		b.SetBytes(32)
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
 			_, _ = encrypter.encapKey.Encapsulate()
-			// Re-create encrypter since Encapsulate consumes the key
 			if i%1000 == 0 && i > 0 {
 				encrypter = &MLKEM768{}
-				_, _ = encrypter.Encrypt("bench", nil)
+				_, _ = encrypter.Encrypt("bench", provider)
 			}
 		}
 	})

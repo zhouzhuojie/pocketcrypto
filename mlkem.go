@@ -6,16 +6,15 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"os"
 )
 
 // MLKEM768 provides post-quantum encryption using ML-KEM-768 (FIPS 203).
-// It uses the ENCRYPTION_KEY environment variable (32 bytes, base64 encoded)
-// to derive the secret key. The key is hashed (SHA-512) to get the required
-// 64-byte seed for ML-KEM key generation.
+// It uses the KeyProvider to get the encryption key, same as AES256GCM.
+// The 32-byte key is hashed (SHA-512) to get the 64-byte seed for ML-KEM.
 type MLKEM768 struct {
 	decapsKey *mlkem.DecapsulationKey768
 	encapKey  *mlkem.EncapsulationKey768
+	cacheKey  []byte
 }
 
 // EncapsulationKey returns the public encapsulation key for sharing.
@@ -27,7 +26,6 @@ func (m *MLKEM768) EncapsulationKey() []byte {
 }
 
 // SecretKey returns the secret decapsulation key for secure storage.
-// Returns nil if the key is not initialized from ENCRYPTION_KEY.
 func (m *MLKEM768) SecretKey() []byte {
 	if m.decapsKey == nil {
 		return nil
@@ -35,20 +33,20 @@ func (m *MLKEM768) SecretKey() []byte {
 	return m.decapsKey.Bytes()
 }
 
-// initFromEnv initializes ML-KEM from ENCRYPTION_KEY environment variable.
-func (m *MLKEM768) initFromEnv() error {
-	keyStr := os.Getenv("ENCRYPTION_KEY")
-	if keyStr == "" {
-		return errors.New("ENCRYPTION_KEY environment variable is not set")
+// initFromProvider initializes ML-KEM keys from the provider.
+func (m *MLKEM768) initFromProvider(provider KeyProvider, keyID string) error {
+	key, err := provider.GetKey(keyID)
+	if err != nil {
+		return err
 	}
 
-	key, err := base64.StdEncoding.DecodeString(keyStr)
-	if err != nil {
-		return fmt.Errorf("invalid base64 encoding in ENCRYPTION_KEY: %w", err)
+	// Use cached key if available
+	if m.cacheKey != nil && string(m.cacheKey) == string(key) {
+		return nil
 	}
 
 	if len(key) != 32 {
-		return errors.New("ENCRYPTION_KEY must be 32 bytes (256 bits) when decoded")
+		return errors.New("key must be 32 bytes for ML-KEM-768")
 	}
 
 	// Hash the 32-byte key to get 64 bytes for ML-KEM seed
@@ -57,11 +55,13 @@ func (m *MLKEM768) initFromEnv() error {
 
 	dk, err := mlkem.NewDecapsulationKey768(seed)
 	if err != nil {
-		return fmt.Errorf("failed to create ML-KEM key from ENCRYPTION_KEY: %w", err)
+		return fmt.Errorf("failed to create ML-KEM key: %w", err)
 	}
 
 	m.decapsKey = dk
 	m.encapKey = dk.EncapsulationKey()
+	m.cacheKey = make([]byte, len(key))
+	copy(m.cacheKey, key)
 	return nil
 }
 
@@ -76,12 +76,13 @@ func (m *MLKEM768) KeySize() int {
 }
 
 // Encrypt encrypts plaintext using ML-KEM-768 key encapsulation.
-// Initializes from ENCRYPTION_KEY if not already initialized.
 func (m *MLKEM768) Encrypt(plaintext string, provider KeyProvider) (string, error) {
-	if m.encapKey == nil {
-		if err := m.initFromEnv(); err != nil {
-			return "", err
-		}
+	if provider == nil {
+		return "", errors.New("key provider is required")
+	}
+
+	if err := m.initFromProvider(provider, "mlkem-main"); err != nil {
+		return "", err
 	}
 
 	sharedSecret, ciphertext := m.encapKey.Encapsulate()
@@ -94,7 +95,7 @@ func (m *MLKEM768) Encrypt(plaintext string, provider KeyProvider) (string, erro
 
 	envelope := DataEnvelope{
 		Algorithm:    m.Algorithm(),
-		KeyID:        "",
+		KeyID:        provider.KeyID(),
 		EncryptedKey: base64.StdEncoding.EncodeToString(ciphertext),
 		Nonce:        "", // AES256GCM handles nonce internally
 		Ciphertext:   encrypted,
@@ -105,47 +106,18 @@ func (m *MLKEM768) Encrypt(plaintext string, provider KeyProvider) (string, erro
 }
 
 // Decrypt decrypts data that was encrypted using ML-KEM-768.
-// Initializes from ENCRYPTION_KEY if not already initialized.
 func (m *MLKEM768) Decrypt(encrypted string, provider KeyProvider) (string, error) {
-	if m.decapsKey == nil {
-		if err := m.initFromEnv(); err != nil {
-			return "", err
-		}
-	}
-
 	var envelope DataEnvelope
 	if err := envelope.Unmarshal(encrypted); err != nil {
 		return "", err
 	}
 
-	// Try to decrypt using the embedded ciphertext first
-	if envelope.EncryptedKey != "" {
-		ciphertext, err := base64.StdEncoding.DecodeString(envelope.EncryptedKey)
-		if err != nil {
-			return "", err
-		}
-
-		sharedSecret, err := m.decapsKey.Decapsulate(ciphertext)
-		if err != nil {
-			return "", err
-		}
-
-		aes := &AES256GCM{}
-		return aes.DecryptWithKey(envelope.Ciphertext, sharedSecret)
-	}
-
-	// Fall back to provider-based decryption
 	if provider == nil {
-		return "", errors.New("no decryption key available")
+		return "", errors.New("key provider is required")
 	}
 
-	encryptedKey, err := provider.DecryptKey([]byte(encrypted))
-	if err != nil {
-		return "", err
-	}
-
-	// Re-parse the envelope from decrypted key
-	if err := envelope.Unmarshal(string(encryptedKey)); err != nil {
+	// Get the appropriate key based on KeyID in envelope
+	if err := m.initFromProvider(provider, envelope.KeyID); err != nil {
 		return "", err
 	}
 
