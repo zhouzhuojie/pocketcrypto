@@ -159,3 +159,52 @@ func TestLocalProvider_Rotation(t *testing.T) {
 		assert.Contains(t, err.Error(), "ENCRYPTION_KEY_OLD")
 	})
 }
+
+func TestLocalProvider_HasPrevious(t *testing.T) {
+	currentKey := "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+	oldKey := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+	t.Run("returns false when no previous key", func(t *testing.T) {
+		os.Setenv("ENCRYPTION_KEY", currentKey)
+		os.Unsetenv("ENCRYPTION_KEY_OLD")
+		defer os.Unsetenv("ENCRYPTION_KEY")
+		defer os.Unsetenv("ENCRYPTION_KEY_OLD")
+
+		provider, err := newLocalProvider()
+		require.NoError(t, err)
+		assert.False(t, provider.HasPrevious())
+	})
+
+	t.Run("returns true when previous key exists", func(t *testing.T) {
+		os.Setenv("ENCRYPTION_KEY", currentKey)
+		os.Setenv("ENCRYPTION_KEY_OLD", oldKey)
+		defer os.Unsetenv("ENCRYPTION_KEY")
+		defer os.Unsetenv("ENCRYPTION_KEY_OLD")
+
+		provider, err := newLocalProvider()
+		require.NoError(t, err)
+		assert.True(t, provider.HasPrevious())
+	})
+}
+
+// KeyProvider interface compliance tests
+
+func TestAWSKMSProvider_Interface(t *testing.T) {
+	// Verify AWSKMSProvider implements KeyProvider interface
+	var _ KeyProvider = (*AWSKMSProvider)(nil)
+}
+
+func TestVaultProvider_Interface(t *testing.T) {
+	// Verify VaultProvider implements KeyProvider interface
+	var _ KeyProvider = (*VaultProvider)(nil)
+}
+
+func TestLocalProvider_Interface(t *testing.T) {
+	// Verify LocalProvider implements KeyProvider interface
+	var _ KeyProvider = (*LocalProvider)(nil)
+}
+
+func TestRotatableProvider_Interface(t *testing.T) {
+	// Verify rotatableMockKeyProvider implements RotatableProvider interface
+	var _ RotatableProvider = (*rotatableMockKeyProvider)(nil)
+}

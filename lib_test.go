@@ -219,68 +219,7 @@ func TestIsEncrypted(t *testing.T) {
 	})
 }
 
-func TestFieldEncryptionRequest(t *testing.T) {
-	t.Run("basic request", func(t *testing.T) {
-		req := FieldEncryptionRequest{
-			CollectionConfig: CollectionConfig{
-				Collection: "wallets",
-				Fields:     []string{"private_key", "mnemonic"},
-			},
-			DryRun:    true,
-			BatchSize: 50,
-		}
 
-		assert.Equal(t, "wallets", req.Collection)
-		assert.Equal(t, []string{"private_key", "mnemonic"}, req.Fields)
-		assert.True(t, req.DryRun)
-		assert.Equal(t, 50, req.BatchSize)
-	})
-}
-
-func TestFieldEncryptionResult(t *testing.T) {
-	t.Run("empty result", func(t *testing.T) {
-		result := FieldEncryptionResult{
-			TotalRecords: 0,
-			Migrated:     0,
-			Skipped:      0,
-			Errors:       nil,
-		}
-
-		assert.Equal(t, 0, result.TotalRecords)
-		assert.Equal(t, 0, result.Migrated)
-		assert.Equal(t, 0, result.Skipped)
-	})
-
-	t.Run("result with data", func(t *testing.T) {
-		result := FieldEncryptionResult{
-			TotalRecords: 100,
-			Migrated:     75,
-			Skipped:      25,
-			Errors:       []string{"record 123: encryption failed"},
-		}
-
-		assert.Equal(t, 100, result.TotalRecords)
-		assert.Equal(t, 75, result.Migrated)
-		assert.Equal(t, 25, result.Skipped)
-		assert.Len(t, result.Errors, 1)
-	})
-}
-
-func TestEncryptionStatus(t *testing.T) {
-	t.Run("status with counts", func(t *testing.T) {
-		status := EncryptionStatus{
-			Collection:     "wallets",
-			TotalRecords:   500,
-			EncryptedCount: 300,
-			PlaintextCount: 200,
-		}
-
-		assert.Equal(t, "wallets", status.Collection)
-		assert.Equal(t, 500, status.TotalRecords)
-		assert.Equal(t, 300, status.EncryptedCount)
-		assert.Equal(t, 200, status.PlaintextCount)
-	})
-}
 
 func TestEncryptRecordLogic(t *testing.T) {
 	validKey := "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
@@ -476,6 +415,42 @@ func (r *mockRecord) GetString(field string) string {
 
 func (r *mockRecord) Set(field string, value any) {
 	r.fields[field] = value
+}
+
+func TestStaticProvider(t *testing.T) {
+	key := bytes.Repeat([]byte{0xAB}, 32)
+	provider := &staticProvider{keyID: "test-static-key", key: key}
+
+	t.Run("GetKey returns the key", func(t *testing.T) {
+		retrievedKey, err := provider.GetKey("any-id")
+		require.NoError(t, err)
+		assert.Equal(t, key, retrievedKey)
+	})
+
+	t.Run("GetKey ignores keyID parameter", func(t *testing.T) {
+		key1, _ := provider.GetKey("id-1")
+		key2, _ := provider.GetKey("id-2")
+		key3, _ := provider.GetKey("")
+		assert.Equal(t, key1, key2)
+		assert.Equal(t, key2, key3)
+	})
+
+	t.Run("EncryptKey returns key unchanged", func(t *testing.T) {
+		result, err := provider.EncryptKey(key, "test-id")
+		require.NoError(t, err)
+		assert.Equal(t, key, result)
+	})
+
+	t.Run("DecryptKey returns key unchanged", func(t *testing.T) {
+		encryptedKey := []byte("encrypted-key-bytes")
+		result, err := provider.DecryptKey(encryptedKey)
+		require.NoError(t, err)
+		assert.Equal(t, encryptedKey, result)
+	})
+
+	t.Run("KeyID returns configured keyID", func(t *testing.T) {
+		assert.Equal(t, "test-static-key", provider.KeyID())
+	})
 }
 
 // testEncryptRecord is a helper function that tests the encryption logic
