@@ -507,6 +507,42 @@ func (fe *FieldEncrypter) Status(ctx context.Context, collectionName string) (*E
 	return status, nil
 }
 
+// providerRegistry stores factories for creating KeyProvider instances.
+// Built-in providers are registered at initialization.
+var providerRegistry = make(map[ProviderType]func() (KeyProvider, error))
+
+func init() {
+	// Register built-in providers with type-safe wrappers
+	providerRegistry[ProviderTypeLocal] = func() (KeyProvider, error) { return newLocalProvider() }
+	providerRegistry[ProviderTypeAWSKMS] = func() (KeyProvider, error) { return newAWSKMSProviderFromEnv() }
+	providerRegistry[ProviderTypeVault] = func() (KeyProvider, error) { return newVaultProvider() }
+}
+
+// RegisterProvider registers a custom KeyProvider factory for a provider type.
+// This allows applications to use custom key management without modifying pocketcrypto.
+//
+// Example:
+//
+//	import "github.com/zhouzhuojie/pocketcrypto"
+//
+//	type MyProvider struct{ ... }
+//
+//	func (p *MyProvider) GetKey(keyID string) ([]byte, error) { ... }
+//	func (p *MyProvider) EncryptKey(key []byte, keyID string) ([]byte, error) { ... }
+//	func (p *MyProvider) DecryptKey(encryptedKey []byte) ([]byte, error) { ... }
+//	func (p *MyProvider) KeyID() string { ... }
+//
+//	func newMyProvider() (pocketcrypto.KeyProvider, error) {
+//	    return &MyProvider{}, nil
+//	}
+//
+//	func init() {
+//	    pocketcrypto.RegisterProvider("my-custom-provider", newMyProvider)
+//	}
+func RegisterProvider(providerType ProviderType, factory func() (KeyProvider, error)) {
+	providerRegistry[providerType] = factory
+}
+
 func newProvider(providerType ProviderType) (KeyProvider, error) {
 	if providerType == "" {
 		providerType = ProviderType(os.Getenv("KEY_PROVIDER"))
@@ -516,16 +552,12 @@ func newProvider(providerType ProviderType) (KeyProvider, error) {
 		providerType = ProviderTypeLocal
 	}
 
-	switch providerType {
-	case ProviderTypeLocal:
-		return newLocalProvider()
-	case ProviderTypeAWSKMS:
-		return newAWSKMSProviderFromEnv()
-	case ProviderTypeVault:
-		return newVaultProvider()
-	default:
+	factory, ok := providerRegistry[providerType]
+	if !ok {
 		return nil, errUnknownProviderType
 	}
+
+	return factory()
 }
 
 type staticProvider struct {

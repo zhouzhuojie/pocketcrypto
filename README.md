@@ -83,6 +83,20 @@ export VAULT_ADDR="https://vault.company.com"
 export VAULT_TOKEN=your-token
 ```
 
+## Environment Variables
+
+| Variable | Provider | Required | Description |
+|----------|----------|----------|-------------|
+| `KEY_PROVIDER` | All | No | Provider type: `local`, `aws-kms`, `vault`. Defaults to `local`. |
+| `ENCRYPTION_KEY` | Local | Yes | Current master key (32 bytes, base64 encoded). |
+| `ENCRYPTION_KEY_OLD` | Local | No | Previous key for lazy rotation. |
+| `AWS_KMS_KEY_ID` | AWS KMS | Yes | KMS key ID or alias (e.g., `alias/pocketcrypto-key`). |
+| `AWS_REGION` | AWS KMS | No | AWS region. Uses SDK default if not set. |
+| `VAULT_ADDR` | Vault | Yes | Vault server address (e.g., `https://vault.company.com`). |
+| `VAULT_TOKEN` | Vault | Yes | Vault authentication token. |
+| `VAULT_MOUNT_PATH` | Vault | No | Vault secrets mount path. Defaults to `secret`. |
+| `VAULT_KEY_PATH` | Vault | No | Vault key path within mount. Defaults to `pocketcrypto/encryption-key`. |
+
 ## Key Rotation
 
 PocketCrypto uses **lazy rotation** - old data is re-encrypted on read.
@@ -124,19 +138,21 @@ Behaviors:
 
 ## Extending PocketCrypto
 
-### Adding a New Encryption Algorithm
+### Bring Your Own Algorithm (No Upstream Changes)
 
-1. Implement the `Encrypter` interface in `algos.go`:
+Implement the `Encrypter` interface and pass it to `Register()`:
 
 ```go
+import "github.com/zhouzhuojie/pocketcrypto"
+
 type MyAlgorithm struct{}
 
-func (a *MyAlgorithm) Encrypt(plaintext string, provider KeyProvider) (string, error) {
-    // Implementation
+func (a *MyAlgorithm) Encrypt(plaintext string, provider pocketcrypto.KeyProvider) (string, error) {
+    // Your encryption logic
 }
 
-func (a *MyAlgorithm) Decrypt(encrypted string, provider KeyProvider) (string, error) {
-    // Implementation
+func (a *MyAlgorithm) Decrypt(encrypted string, provider pocketcrypto.KeyProvider) (string, error) {
+    // Your decryption logic
 }
 
 func (a *MyAlgorithm) Algorithm() string {
@@ -144,66 +160,54 @@ func (a *MyAlgorithm) Algorithm() string {
 }
 
 func (a *MyAlgorithm) KeySize() int {
-    return 32 // or appropriate size
+    return 32
 }
+
+// Use it:
+pocketcrypto.Register(app, &MyAlgorithm{},
+    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"secret"}},
+)
 ```
 
-2. Use `DataEnvelope` to store encryption metadata:
+Use `DataEnvelope` to store encryption metadata for compatibility with lazy rotation.
+
+### Bring Your Own Key Provider (No Upstream Changes)
+
+Implement `KeyProvider` and register with `RegisterProvider()`:
 
 ```go
-envelope := DataEnvelope{
-    Algorithm:  a.Algorithm(),
-    KeyID:      provider.KeyID(),
-    Ciphertext: "...",  // your encrypted data
-    Nonce:      "...",  // if applicable
-    Version:    1,
-}
-```
+import "github.com/zhouzhuojie/pocketcrypto"
 
-3. Add tests in `algos_test.go`
-
-### Adding a New Key Provider
-
-1. Implement the `KeyProvider` interface in `providers.go`:
-
-```go
-type MyProvider struct{}
+type MyProvider struct{ secret string }
 
 func (p *MyProvider) GetKey(keyID string) ([]byte, error) {
-    // Return encryption key for the given keyID
+    return []byte(p.secret), nil
 }
 
 func (p *MyProvider) EncryptKey(key []byte, keyID string) ([]byte, error) {
-    // Encrypt the key for storage
+    return key, nil
 }
 
 func (p *MyProvider) DecryptKey(encryptedKey []byte) ([]byte, error) {
-    // Decrypt the stored key
+    return encryptedKey, nil
 }
 
 func (p *MyProvider) KeyID() string {
     return "my-provider://default"
 }
+
+func newMyProvider() (pocketcrypto.KeyProvider, error) {
+    return &MyProvider{secret: "my-key"}, nil
+}
+
+func init() {
+    pocketcrypto.RegisterProvider("my-provider", newMyProvider)
+}
 ```
 
-2. Add to the provider factory in `newProvider()`:
+Set `KEY_PROVIDER=my-provider` environment variable to use your provider.
 
-```go
-case ProviderTypeMyProvider:
-    return newMyProvider()
-```
-
-3. Add provider type constant:
-
-```go
-const ProviderTypeMyProvider ProviderType = "my-provider"
-```
-
-4. Add tests in `providers_test.go`
-
-### Adding Rotation Support
-
-Implement the `RotatableProvider` interface:
+For rotation support, also implement `RotatableProvider`:
 
 ```go
 type RotatableProvider interface {
@@ -214,7 +218,14 @@ type RotatableProvider interface {
 }
 ```
 
-The `KeyRotator` in `rotator.go` handles batch re-encryption during key rotation.
+### Contributing to Upstream
+
+To add new algorithms or providers to the package itself:
+
+1. **Algorithms**: Add to `algos.go` with `Encrypt`, `Decrypt`, `Algorithm()`, `KeySize()` methods
+2. **Providers**: Add factory to `providers.go` and register in `lib.go` init()
+3. Add provider type constant: `const ProviderTypeX ProviderType = "x"`
+4. Add tests in respective `_test.go` files
 
 ## Limitations
 
