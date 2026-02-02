@@ -36,7 +36,6 @@ func main() {
 	pocketcrypto.RegisterDefaultFieldEncryptionAPI(app)
 
 	// Start the server
-	// Default superadmin: admin@example.com / password123
 	fmt.Println(">>> STARTING SERVER <<<")
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
