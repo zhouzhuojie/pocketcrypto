@@ -1,13 +1,16 @@
 # PocketCrypto
 
-Column-level encryption for PocketBase with post-quantum ML-KEM-768 support.
+Column-level encryption for PocketBase.
 
 **Value:** Encrypt sensitive fields at rest without changing your PocketBase API or client code. Supports gradual opt-in for existing plaintext data and zero-downtime key rotation.
 
 ```go
 // One-line setup with automatic hook registration
-_, err := pocketcrypto.Register(app, &pocketcrypto.MLKEM768{},
+_, err := pocketcrypto.Register(
+    app,
+    &pocketcrypto.MLKEM768{},
     pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
+    pocketcrypto.CollectionConfig{Collection: "others", Fields: []string{"secret"}}
 )
 ```
 
