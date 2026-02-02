@@ -1,9 +1,12 @@
 # PocketCrypto
 
-Column-level encryption for PocketBase.
+Column-level encryption for PocketBase with post-quantum ML-KEM-768 support.
+
+**Value:** Encrypt sensitive fields at rest without changing your PocketBase API or client code. Supports gradual opt-in for existing plaintext data and zero-downtime key rotation.
 
 ```go
-_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
+// One-line setup with automatic hook registration
+_, err := pocketcrypto.Register(app, &pocketcrypto.MLKEM768{},
     pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
 )
 ```
@@ -14,112 +17,211 @@ _, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
 go get github.com/zhouzhuojie/pocketcrypto
 ```
 
-```go
-import "github.com/zhouzhuojie/pocketcrypto"
+Set `ENCRYPTION_KEY` (32 bytes, base64):
 
-_, err := pocketcrypto.Register(app, &pocketcrypto.AES256GCM{},
-    pocketcrypto.CollectionConfig{Collection: "wallets", Fields: []string{"private_key", "mnemonic"}},
-    pocketcrypto.CollectionConfig{Collection: "secrets", Fields: []string{"value"}},
-)
+```bash
+export ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
+
+See [examples/simple/](examples/simple/) for a working example.
+
+## File Structure
+
+```
+pocketcrypto/
+├── lib.go         # Main entry point: Register(), public APIs, interfaces, types
+├── algos.go       # Encryption algorithms: AES256GCM, MLKEM768
+├── providers.go   # Key providers: LocalProvider, AWSKMSProvider, VaultProvider
+├── rotator.go     # Key rotation logic: KeyRotator
+├── api.go         # REST API endpoints for field encryption
+├── *_test.go      # Test files
+```
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                      Encrypter (Interface)                     │
+│  ┌─────────────────────┐         ┌─────────────────────┐       │
+│  │      AES256GCM      │         │       MLKEM768      │       │
+│  └──────────┬──────────┘         └──────────┬──────────┘       │
+│             │                               │                  │
+│             ▼                               ▼                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                        KeyProvider                      │   │
+│  ├────────────────┬──────────────────┬─────────────────────┤   │
+│  │     Local      │    AWS KMS       │        Vault        │   │
+│  └────────────────┴──────────────────┴─────────────────────┘   │
+└────────────────────────────────────────────────────────────────┘
+```
+
+Both encrypters use `KeyProvider` identically:
+- **Encrypt:** `provider.GetKey(keyID)` → stores `provider.KeyID()` in envelope
+- **Decrypt:** reads `envelope.KeyID` → `provider.GetKey(envelope.KeyID)`
 
 ## Providers
 
-| Provider | Environment | Description |
-|----------|-------------|-------------|
-| Local | `ENCRYPTION_KEY`, `ENCRYPTION_KEY_OLD` | 32-byte base64 keys (development) |
-| AWS KMS | `KEY_PROVIDER=aws-kms`, `AWS_KMS_KEY_ID`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Managed AWS keys |
-| Vault | `KEY_PROVIDER=vault`, `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_MOUNT_PATH`, `VAULT_KEY_PATH` | HashiCorp secrets |
+| Provider | Env Vars | Use Case |
+|----------|----------|----------|
+| Local | `ENCRYPTION_KEY`, `ENCRYPTION_KEY_OLD` | Development, simple deployments |
+| AWS KMS | `KEY_PROVIDER=aws-kms`, `AWS_KMS_KEY_ID`, `AWS_REGION` | Production with AWS |
+| Vault | `KEY_PROVIDER=vault`, `VAULT_ADDR`, `VAULT_TOKEN` | Enterprise with HashiCorp Vault |
 
 ```bash
-# Local (single key for production, or both keys for rotation)
+# Local (both keys during rotation)
 export ENCRYPTION_KEY="$(openssl rand -base64 32)"
-export ENCRYPTION_KEY_OLD="old-key-base64-here"  # during rotation
+export ENCRYPTION_KEY_OLD="old-key-base64"  # optional, during rotation
 
-# AWS KMS (credentials auto-loaded from env, ~/.aws/credentials, or IAM role)
+# AWS KMS
 export KEY_PROVIDER=aws-kms
 export AWS_KMS_KEY_ID=alias/pocketcrypto-key
 export AWS_REGION=us-east-1
-# Optional: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
 # Vault
 export KEY_PROVIDER=vault
-export VAULT_ADDR="http://127.0.0.1:8200"
+export VAULT_ADDR="https://vault.company.com"
 export VAULT_TOKEN=your-token
-export VAULT_MOUNT_PATH=secret  # optional, defaults to "secret"
-export VAULT_KEY_PATH=pocketcrypto-key  # optional, defaults to "pocketcrypto/encryption-key"
 ```
 
 ## Key Rotation
 
-PocketCrypto supports **lazy key rotation** by default:
+PocketCrypto uses **lazy rotation** - old data is re-encrypted on read.
 
-### How It Works
+**Rotation flow:**
+```
+1. Deploy new key (ENCRYPTION_KEY=new, ENCRYPTION_KEY_OLD=old)
+2. Read → decrypt fails with current → try previous → succeeds
+3. On success: re-encrypt with current key, save
+4. After all reads: remove ENCRYPTION_KEY_OLD
+```
 
-1. **Encrypt always uses current key**
-2. **Decrypt tries current key first**, falls back to previous key if needed
-3. **Old data is automatically re-encrypted on read** (lazy rotation)
-4. **Proactive batch migration** available for complete migration
+No code changes required. Works seamlessly during rotation.
 
-### Local Provider Rotation
+## Gradual Field Opt-in
+
+Migrate existing plaintext fields without downtime:
 
 ```bash
-# Before rotation: only current key
-export ENCRYPTION_KEY="new-key-base64"
+# Register admin API
+pocketcrypto.RegisterDefaultFieldEncryptionAPI(app)
 
-# During rotation: set old key alongside new key
-export ENCRYPTION_KEY="new-key-base64"
-export ENCRYPTION_KEY_OLD="old-key-base64"
+# Dry-run first
+curl -X POST http://localhost:8090/api/field-encryption/dry-run \
+  -H "Authorization: YOUR_ADMIN_TOKEN" \
+  -d '{"collection": "wallets", "fields": ["private_key"], "batch_size": 100}'
 
-# After rotation: remove old key
-export ENCRYPTION_KEY="new-key-base64"
-# (unset ENCRYPTION_KEY_OLD)
+# Apply
+curl -X POST http://localhost:8090/api/field-encryption/apply \
+  -H "Authorization: YOUR_ADMIN_TOKEN" \
+  -d '{"collection": "wallets", "fields": ["private_key"], "batch_size": 100}'
 ```
 
-### Production Flow
+Behaviors:
+- Already encrypted → skipped
+- Empty/null → skipped
+- Plaintext → encrypted
+- Mixed state supported (read path handles both)
 
-**Read Path (Automatic Lazy Rotation):**
-```
-Read Record → Try decrypt with current key → Failed?
-  → Try decrypt with previous key → Success?
-    → Re-encrypt with current key, save, return plaintext
-  → Current key success? Return plaintext
-```
+## Extending PocketCrypto
 
-**Write Path:**
-```
-Write Record → Encrypt with current key → Save
-  → Works seamlessly during rotation
-  → No code changes needed
-```
+### Adding a New Encryption Algorithm
 
-### Proactive Batch Migration
-
-For faster migration or zero reads:
+1. Implement the `Encrypter` interface in `algos.go`:
 
 ```go
-rotator := pocketcrypto.NewKeyRotator(provider, &pocketcrypto.AES256GCM{})
+type MyAlgorithm struct{}
 
-migrated, skipped, err := rotator.RotateAll(
-    ctx,
-    allRecords,
-    func(r *EncryptedRecord) error {
-        return db.Save(r.ID, r.EncryptedFields)
-    },
-)
+func (a *MyAlgorithm) Encrypt(plaintext string, provider KeyProvider) (string, error) {
+    // Implementation
+}
+
+func (a *MyAlgorithm) Decrypt(encrypted string, provider KeyProvider) (string, error) {
+    // Implementation
+}
+
+func (a *MyAlgorithm) Algorithm() string {
+    return "MyAlgorithm"
+}
+
+func (a *MyAlgorithm) KeySize() int {
+    return 32 // or appropriate size
+}
 ```
 
-### Rotation Checklist
+2. Use `DataEnvelope` to store encryption metadata:
 
-1. **Before rotation:** Store new key (Local: ENCRYPTION_KEY, KMS/Vault: in service)
-2. **During rotation:** Reads automatically lazy-rotate old data
-3. **After rotation:** Remove old key (ENCRYPTION_KEY_OLD) when all data migrated
+```go
+envelope := DataEnvelope{
+    Algorithm:  a.Algorithm(),
+    KeyID:      provider.KeyID(),
+    Ciphertext: "...",  // your encrypted data
+    Nonce:      "...",  // if applicable
+    Version:    1,
+}
+```
 
-## What You Can't Do
+3. Add tests in `algos_test.go`
 
-- Search or filter encrypted fields
-- Index encrypted fields for fast lookups
-- Compare encrypted values
+### Adding a New Key Provider
+
+1. Implement the `KeyProvider` interface in `providers.go`:
+
+```go
+type MyProvider struct{}
+
+func (p *MyProvider) GetKey(keyID string) ([]byte, error) {
+    // Return encryption key for the given keyID
+}
+
+func (p *MyProvider) EncryptKey(key []byte, keyID string) ([]byte, error) {
+    // Encrypt the key for storage
+}
+
+func (p *MyProvider) DecryptKey(encryptedKey []byte) ([]byte, error) {
+    // Decrypt the stored key
+}
+
+func (p *MyProvider) KeyID() string {
+    return "my-provider://default"
+}
+```
+
+2. Add to the provider factory in `newProvider()`:
+
+```go
+case ProviderTypeMyProvider:
+    return newMyProvider()
+```
+
+3. Add provider type constant:
+
+```go
+const ProviderTypeMyProvider ProviderType = "my-provider"
+```
+
+4. Add tests in `providers_test.go`
+
+### Adding Rotation Support
+
+Implement the `RotatableProvider` interface:
+
+```go
+type RotatableProvider interface {
+    KeyProvider
+    RotateKey(ctx context.Context) (string, error)
+    GetKeyVersion(keyID string, version int) ([]byte, error)
+    CurrentKeyVersion() int
+}
+```
+
+The `KeyRotator` in `rotator.go` handles batch re-encryption during key rotation.
+
+## Limitations
+
+Encrypted fields cannot be:
+- Searched or filtered
+- Indexed for fast lookups
+- Compared for equality
 
 ## License
 

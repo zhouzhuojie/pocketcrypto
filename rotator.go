@@ -155,25 +155,3 @@ func (r *KeyRotator) RotateKey(ctx context.Context) error {
 	log.Printf("rotated to new key version: %s", newKeyID)
 	return nil
 }
-
-// staticProvider is a helper provider for a fixed key.
-type staticProvider struct {
-	keyID string
-	key   []byte
-}
-
-func (p *staticProvider) GetKey(keyID string) ([]byte, error) {
-	return p.key, nil
-}
-
-func (p *staticProvider) EncryptKey(key []byte, keyID string) ([]byte, error) {
-	return key, nil
-}
-
-func (p *staticProvider) DecryptKey(encryptedKey []byte) ([]byte, error) {
-	return encryptedKey, nil
-}
-
-func (p *staticProvider) KeyID() string {
-	return p.keyID
-}

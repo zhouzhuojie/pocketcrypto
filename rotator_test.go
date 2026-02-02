@@ -334,3 +334,71 @@ func (m *errorKeyProvider) GetKey(keyID string) ([]byte, error) {
 	}
 	return m.rotatableMockKeyProvider.GetKey(keyID)
 }
+
+func TestKeyRotator_RotateKey(t *testing.T) {
+	provider := &rotatableMockKeyProvider{
+		keys:           map[string][]byte{"key1": bytes.Repeat([]byte{0x01}, 32)},
+		currentKeyID:   "key1",
+		currentVersion: 1,
+	}
+	encrypter := &AES256GCM{}
+	rotator := newKeyRotator(provider, encrypter)
+
+	t.Run("rotate key successfully", func(t *testing.T) {
+		err := rotator.RotateKey(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 2, provider.currentVersion)
+	})
+
+	t.Run("multiple rotations", func(t *testing.T) {
+		err := rotator.RotateKey(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 3, provider.currentVersion)
+
+		err = rotator.RotateKey(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 4, provider.currentVersion)
+	})
+}
+
+func TestKeyRotator_Integration(t *testing.T) {
+	// Test full rotation workflow
+	oldKey := bytes.Repeat([]byte{0x01}, 32)
+	newKey := bytes.Repeat([]byte{0x02}, 32)
+
+	oldProvider := &rotatableMockKeyProvider{
+		keys:         map[string][]byte{"old-key": oldKey},
+		currentKeyID: "old-key",
+	}
+
+	newProvider := &rotatableMockKeyProvider{
+		keys:         map[string][]byte{"old-key": oldKey, "new-key": newKey},
+		currentKeyID: "new-key",
+	}
+
+	encrypter := &AES256GCM{}
+	rotator := newKeyRotator(newProvider, encrypter)
+
+	t.Run("workflow: encrypt old, decrypt with rotation, verify new", func(t *testing.T) {
+		// Step 1: Encrypt data with old key (simulating legacy data)
+		oldEncrypted, err := encrypter.Encrypt("legacy-secret", oldProvider)
+		require.NoError(t, err)
+
+		// Step 2: Lazy decrypt should rotate to new key
+		plaintext, newEncrypted, rotated, err := rotator.LazyDecrypt(oldEncrypted, newProvider)
+		require.NoError(t, err)
+		assert.True(t, rotated)
+		assert.Equal(t, "legacy-secret", plaintext)
+		assert.NotEmpty(t, newEncrypted)
+
+		// Step 3: New encrypted data should decrypt with new key
+		decrypted, err := encrypter.Decrypt(newEncrypted, newProvider)
+		require.NoError(t, err)
+		assert.Equal(t, "legacy-secret", decrypted)
+
+		// Step 4: Verify no more rotation needed
+		_, _, rotatedAgain, err := rotator.LazyDecrypt(newEncrypted, newProvider)
+		require.NoError(t, err)
+		assert.False(t, rotatedAgain)
+	})
+}
